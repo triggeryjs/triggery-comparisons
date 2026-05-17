@@ -1,20 +1,28 @@
 // "Naked" baseline — no orchestration library. Plain JavaScript: a tiny
-// emitter, three setters that mutate captured variables, one `fire` method
-// that contains the rule top-to-bottom.
+// emitter, captured-variable state, hand-rolled throttle + debounce timers,
+// per-channel typing maps, all glued together in one factory function.
 //
-// This is what you write when you reach for "I don't need a library" and want
-// to see how much that costs you in code-per-scenario. Honest comparison.
+// This is what you write when you reach for "I don't need a library" on a
+// real scenario. The honesty of the comparison.
 
 import type { Engine, EngineFactory } from '../engine';
-import type { Message, Settings, Sound, ToastPayload } from '../types';
+import type {
+  ConnectionState,
+  Message,
+  Settings,
+  Sound,
+  ToastPayload,
+  TypingUpdate,
+  User,
+} from '../types';
 
-function emitter<T>() {
-  const subs = new Set<(v: T) => void>();
+function emitter<A extends unknown[]>() {
+  const subs = new Set<(...a: A) => void>();
   return {
-    emit: (v: T) => {
-      for (const s of subs) s(v);
+    emit: (...a: A) => {
+      for (const s of subs) s(...a);
     },
-    on: (cb: (v: T) => void) => (subs.add(cb), () => subs.delete(cb)),
+    on: (cb: (...a: A) => void) => (subs.add(cb), () => subs.delete(cb)),
   };
 }
 
@@ -22,42 +30,122 @@ export const nakedFactory: EngineFactory = {
   meta: {
     id: 'naked',
     label: 'Naked (no library)',
-    description: 'Plain JS — tiny emitter + setters + a fire method.',
+    description: 'Plain JS — emitters, captured state, hand-rolled timers.',
     sourcePath: 'notifications-pipeline/src/engines/naked.ts',
   },
   create(): Engine {
     let settings: Settings | null = null;
-    let activeChannelId: string | null = null;
-    let currentUserId: string | null = null;
-    let soundTimer: ReturnType<typeof setTimeout> | null = null;
+    let active: string | null = null;
+    let user: User | null = null;
+    let muted: ReadonlySet<string> = new Set();
+    let prevConn: ConnectionState = 'connecting';
 
-    const toast = emitter<ToastPayload>();
-    const sound = emitter<Sound>();
-    const badge = emitter<string>();
+    let soundTimer: ReturnType<typeof setTimeout> | null = null;
+    let channelTimer: ReturnType<typeof setTimeout> | null = null;
+    const toastWindow: number[] = [];
+    const typingByChannel = new Map<string, Set<string>>();
+
+    const toastE = emitter<[ToastPayload]>();
+    const soundE = emitter<[Sound]>();
+    const incBadgeE = emitter<[string, boolean]>();
+    const clearBadgeE = emitter<[string]>();
+    const typingE = emitter<[TypingUpdate]>();
+    const markReadE = emitter<[string]>();
+
+    const emitToastThrottled = (p: ToastPayload) => {
+      const now = Date.now();
+      while (toastWindow.length && now - toastWindow[0]! >= 1000) toastWindow.shift();
+      if (toastWindow.length >= 3) return;
+      toastWindow.push(now);
+      toastE.emit(p);
+    };
 
     return {
       fireMessage: (msg: Message) => {
-        if (settings == null || currentUserId == null) return;
-        if (msg.channelId === activeChannelId) return;
-        if (msg.authorId === currentUserId) return;
+        if (!user || msg.author.id === user.id) return;
+        const isMention = msg.mentions.includes(user.id);
+        const isMuted = muted.has(msg.channelId);
+        incBadgeE.emit(msg.channelId, isMuted);
 
-        if (settings.notifications) {
-          toast.emit({ title: msg.author, body: msg.text });
+        if (msg.channelId === active) return;
+        if (isMuted) return;
+        if (!settings?.notifications) return;
+        if (settings.mentionsOnly && !isMention) return;
+        if (settings.dnd && !isMention) return;
+
+        emitToastThrottled({
+          id: msg.id,
+          kind: isMention ? 'mention' : 'message',
+          title: msg.author.name,
+          body: msg.text,
+          channelId: msg.channelId,
+          authorAvatar: msg.author.avatar,
+          authorColor: msg.author.color,
+          emittedAt: msg.emittedAt,
+        });
+
+        if (soundTimer) clearTimeout(soundTimer);
+        soundTimer = setTimeout(() => soundE.emit(isMention ? 'mention' : 'beep'), 600);
+      },
+      fireTypingStart: ({ userId, channelId }) => {
+        let set = typingByChannel.get(channelId);
+        if (!set) {
+          set = new Set();
+          typingByChannel.set(channelId, set);
         }
-        if (settings.sound && !settings.dnd) {
-          if (soundTimer != null) clearTimeout(soundTimer);
-          soundTimer = setTimeout(() => sound.emit('beep'), 800);
+        set.add(userId);
+        typingE.emit({ channelId, userIds: [...set] });
+      },
+      fireTypingStop: ({ userId, channelId }) => {
+        const set = typingByChannel.get(channelId);
+        if (!set) return;
+        set.delete(userId);
+        typingE.emit({ channelId, userIds: [...set] });
+      },
+      fireChannelChanged: (id) => {
+        if (channelTimer) clearTimeout(channelTimer);
+        if (id == null) return;
+        channelTimer = setTimeout(() => {
+          markReadE.emit(id);
+          clearBadgeE.emit(id);
+        }, 2000);
+      },
+      setConnectionState: (next) => {
+        const prev = prevConn;
+        prevConn = next;
+        if (next === prev) return;
+        if (next === 'disconnected') {
+          toastE.emit({
+            id: `sys-${Date.now()}`,
+            kind: 'system',
+            title: 'Connection lost',
+            body: 'Trying to reconnect…',
+            emittedAt: Date.now(),
+          });
+        } else if (next === 'connected' && prev === 'disconnected') {
+          toastE.emit({
+            id: `sys-${Date.now()}`,
+            kind: 'system',
+            title: 'Reconnected',
+            body: '',
+            emittedAt: Date.now(),
+          });
+          soundE.emit('reconnect');
         }
-        badge.emit(msg.channelId);
       },
       setSettings: (s) => (settings = s),
-      setActiveChannel: (id) => (activeChannelId = id),
-      setCurrentUser: (id) => (currentUserId = id),
-      onShowToast: (cb) => toast.on(cb),
-      onPlaySound: (cb) => sound.on(cb),
-      onIncrementBadge: (cb) => badge.on(cb),
+      setActiveChannel: (id) => (active = id),
+      setCurrentUser: (u) => (user = u),
+      setMutedChannels: (ids) => (muted = ids),
+      onShowToast: (cb) => toastE.on(cb),
+      onPlaySound: (cb) => soundE.on(cb),
+      onIncrementBadge: (cb) => incBadgeE.on(cb),
+      onClearBadge: (cb) => clearBadgeE.on(cb),
+      onTypingChange: (cb) => typingE.on(cb),
+      onMarkChannelRead: (cb) => markReadE.on(cb),
       dispose: () => {
-        if (soundTimer != null) clearTimeout(soundTimer);
+        if (soundTimer) clearTimeout(soundTimer);
+        if (channelTimer) clearTimeout(channelTimer);
       },
     };
   },

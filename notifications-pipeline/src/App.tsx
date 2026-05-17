@@ -1,244 +1,412 @@
-// Single shared UI shell — every engine implements the same `Engine`
-// contract so this component is identical across implementations. The only
-// thing that changes between ?engine=triggery and ?engine=effector is which
-// file in `src/engines/` is wired up.
+// Discord-like shell. Talks only to the Engine contract — the same UI swaps
+// engines via ?engine=… without knowing how the orchestration is done inside.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Engine } from './engine';
 import { ENGINE_LIST, resolveEngineId } from './registry';
-import type { Settings, Sound, ToastPayload } from './types';
+import { CHANNELS, ME, USERS, makeMessage } from './scenario';
+import { createSimulator } from './simulator';
+import type { ConnectionState, Message, Settings, Sound, ToastPayload, TypingUpdate, User } from './types';
 
-const CURRENT_USER = 'me';
+const fmtTime = (ms: number) => {
+  const d = new Date(ms);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+};
 
 export function App() {
   const engineId = useMemo(
     () => resolveEngineId(new URLSearchParams(window.location.search).get('engine')),
     [],
   );
-  const engine = useMemo(() => {
-    const factory = ENGINE_LIST.find((e) => e.meta.id === engineId);
-    if (!factory) throw new Error(`Unknown engine: ${engineId}`);
-    return factory.create();
-  }, [engineId]);
-
-  useEffect(() => () => engine.dispose(), [engine]);
+  const factory = useMemo(() => ENGINE_LIST.find((e) => e.meta.id === engineId)!, [engineId]);
+  // Ref-based lazy init survives StrictMode's synthetic unmount-remount —
+  // useEffect cleanup would dispose the engine between the two mounts and
+  // the second mount's subscriptions would talk to a disposed instance.
+  // The engine is GC'd when the page navigates away (engine swap is a full
+  // reload because the `<a href="?engine=…">` triggers it).
+  const engineRef = useRef<Engine | null>(null);
+  if (engineRef.current === null) engineRef.current = factory.create();
+  const engine = engineRef.current;
 
   return (
-    <main
-      style={{
-        fontFamily: 'system-ui, sans-serif',
-        padding: 24,
-        maxWidth: 720,
-        margin: '0 auto',
-        color: '#1c1a2e',
-      }}
-    >
-      <Header current={engineId} />
-      <SettingsPanel engine={engine} />
-      <ChatPanel engine={engine} activeChannelId="general" />
-      <NotificationLayer engine={engine} />
-      <BadgePanel engine={engine} />
-      <SoundLog engine={engine} />
-    </main>
+    <>
+      <EngineBar current={engineId} />
+      <div className="layout">
+        <ChatShell engine={engine} />
+      </div>
+    </>
   );
 }
 
-function Header({ current }: { current: string }) {
+function EngineBar({ current }: { current: string }) {
+  const meta = ENGINE_LIST.find((e) => e.meta.id === current)?.meta;
   return (
-    <header style={{ marginBottom: 24 }}>
-      <h1 style={{ marginBottom: 4 }}>Notifications pipeline</h1>
-      <p style={{ color: '#5b4d8e', marginBottom: 12 }}>
-        Same scenario, six implementations. Swap via the URL.
-      </p>
-      <nav style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {ENGINE_LIST.map((e) => (
-          <a
-            key={e.meta.id}
-            href={`?engine=${e.meta.id}`}
-            style={{
-              padding: '6px 12px',
-              borderRadius: 6,
-              border: '1px solid #ccc',
-              textDecoration: 'none',
-              color: current === e.meta.id ? '#fff' : '#1c1a2e',
-              background: current === e.meta.id ? '#af37c5' : '#f4eefb',
-              fontSize: 13,
-            }}
-          >
-            {e.meta.label}
-          </a>
-        ))}
-      </nav>
+    <header className="engine-bar">
+      <span className="label">Engine</span>
+      {ENGINE_LIST.map((e) => (
+        <a
+          key={e.meta.id}
+          className={`pill ${current === e.meta.id ? 'active' : ''}`}
+          href={`?engine=${e.meta.id}`}
+        >
+          {e.meta.label}
+        </a>
+      ))}
+      <span className="stats">
+        <strong>{meta?.label}</strong> — same UI, different orchestration file
+      </span>
     </header>
   );
 }
 
-function SettingsPanel({ engine }: { engine: Engine }) {
+function ChatShell({ engine }: { engine: Engine }) {
+  // ─── UI state ────────────────────────────────────────────────
+  const [activeId, setActiveId] = useState<string>('general');
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [settings, setSettings] = useState<Settings>({
-    sound: true,
     notifications: true,
+    sound: true,
     dnd: false,
+    mentionsOnly: false,
   });
+  const [muted, setMuted] = useState<Set<string>>(new Set(['announcements']));
+  const [badges, setBadges] = useState<Record<string, { count: number; muted: boolean }>>({});
+  const [toasts, setToasts] = useState<ToastPayload[]>([]);
+  const [sounds, setSounds] = useState<{ id: string; time: number; sound: Sound }[]>([]);
+  const [typingByChannel, setTypingByChannel] = useState<Record<string, string[]>>({});
+  const [conn, setConn] = useState<ConnectionState>('connected');
+  const [auto, setAuto] = useState(false);
 
-  // Push current settings into engine on every change. Initial value is pushed
-  // by the same effect on first render.
+  const messageListRef = useRef<HTMLDivElement>(null);
+
+  // ─── engine wiring ───────────────────────────────────────────
+  // Push current state into engine. Block bodies so the implicit return value
+  // is discarded — useEffect treats non-undefined/non-function returns as
+  // cleanup and throws in React 19.
   useEffect(() => {
     engine.setSettings(settings);
   }, [engine, settings]);
-
-  const toggle = (k: keyof Settings) => setSettings((s) => ({ ...s, [k]: !s[k] }));
-
-  return (
-    <fieldset style={{ marginBottom: 16 }}>
-      <legend>Settings</legend>
-      <label style={{ marginRight: 16 }}>
-        <input
-          type="checkbox"
-          checked={settings.notifications}
-          onChange={() => toggle('notifications')}
-        />{' '}
-        Show toasts
-      </label>
-      <label style={{ marginRight: 16 }}>
-        <input type="checkbox" checked={settings.sound} onChange={() => toggle('sound')} /> Sound
-      </label>
-      <label>
-        <input type="checkbox" checked={settings.dnd} onChange={() => toggle('dnd')} /> Do not
-        disturb
-      </label>
-    </fieldset>
-  );
-}
-
-function ChatPanel({ engine, activeChannelId }: { engine: Engine; activeChannelId: string }) {
   useEffect(() => {
-    engine.setActiveChannel(activeChannelId);
-    engine.setCurrentUser(CURRENT_USER);
-  }, [engine, activeChannelId]);
+    engine.setActiveChannel(activeId);
+  }, [engine, activeId]);
+  useEffect(() => {
+    engine.setCurrentUser(ME as User);
+  }, [engine]);
+  useEffect(() => {
+    engine.setMutedChannels(muted);
+  }, [engine, muted]);
+  useEffect(() => {
+    engine.setConnectionState(conn);
+  }, [engine, conn]);
 
-  const fireExternal = () =>
-    engine.fireMessage({
-      id: crypto.randomUUID(),
-      author: 'Alice',
-      authorId: 'alice',
-      text: 'hi from #design',
-      channelId: 'design',
-    });
-  const fireSelf = () =>
-    engine.fireMessage({
-      id: crypto.randomUUID(),
-      author: 'me',
-      authorId: CURRENT_USER,
-      text: 'echo from myself',
-      channelId: 'general',
-    });
-  const fireActive = () =>
-    engine.fireMessage({
-      id: crypto.randomUUID(),
-      author: 'Bob',
-      authorId: 'bob',
-      text: 'in the channel you are reading',
-      channelId: 'general',
-    });
+  // On channel switch — tell engine for the debounced mark-read rule
+  useEffect(() => {
+    engine.fireChannelChanged(activeId);
+  }, [engine, activeId]);
 
-  return (
-    <section style={{ marginBottom: 16 }}>
-      <h3>Chat</h3>
-      <button type="button" onClick={fireExternal} style={{ marginRight: 8 }}>
-        Message in #design
-      </button>
-      <button type="button" onClick={fireSelf} style={{ marginRight: 8 }}>
-        From me (ignored)
-      </button>
-      <button type="button" onClick={fireActive}>
-        In active #general (ignored)
-      </button>
-      <p style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>Active channel: {activeChannelId}</p>
-    </section>
-  );
-}
-
-function NotificationLayer({ engine }: { engine: Engine }) {
-  const [toasts, setToasts] = useState<Array<{ id: string } & ToastPayload>>([]);
-
+  // Subscribe to outputs
   useEffect(
     () =>
-      engine.onShowToast((payload) => {
-        setToasts((arr) => [{ id: crypto.randomUUID(), ...payload }, ...arr].slice(0, 5));
+      engine.onShowToast((t) => {
+        setToasts((arr) => [t, ...arr].slice(0, 5));
+        setTimeout(() => {
+          setToasts((arr) => arr.filter((x) => x.id !== t.id));
+        }, 4500);
       }),
     [engine],
   );
+  useEffect(
+    () =>
+      engine.onPlaySound((s) => {
+        setSounds((arr) =>
+          [{ id: `${Date.now()}-${Math.random()}`, time: Date.now(), sound: s }, ...arr].slice(0, 6),
+        );
+      }),
+    [engine],
+  );
+  useEffect(
+    () =>
+      engine.onIncrementBadge((channelId, isMuted) => {
+        setBadges((b) => ({
+          ...b,
+          [channelId]: { count: (b[channelId]?.count ?? 0) + 1, muted: isMuted },
+        }));
+      }),
+    [engine],
+  );
+  useEffect(
+    () =>
+      engine.onClearBadge((channelId) => {
+        setBadges((b) => {
+          const { [channelId]: _, ...rest } = b;
+          return rest;
+        });
+      }),
+    [engine],
+  );
+  useEffect(
+    () =>
+      engine.onTypingChange((u: TypingUpdate) => {
+        setTypingByChannel((t) => ({ ...t, [u.channelId]: [...u.userIds] }));
+      }),
+    [engine],
+  );
+  useEffect(() => engine.onMarkChannelRead(() => undefined), [engine]);
+
+  // Also push received messages into the visible message list (UI concern,
+  // not engine concern). Subscribe to all toasts? No — we listen to a side
+  // channel: every fireMessage call writes to messages too.
+  const fireMessage = useCallback(
+    (msg: Message) => {
+      setMessages((m) => ({
+        ...m,
+        [msg.channelId]: [...(m[msg.channelId] ?? []).slice(-49), msg],
+      }));
+      engine.fireMessage(msg);
+    },
+    [engine],
+  );
+
+  // Simulator
+  const simulator = useMemo(() => createSimulator({ ...engine, fireMessage }), [engine, fireMessage]);
+  useEffect(() => {
+    if (auto) simulator.start();
+    return () => simulator.stop();
+  }, [auto, simulator]);
+
+  // Auto-scroll message list
+  useEffect(() => {
+    if (messageListRef.current) {
+      messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
+    }
+  }, [messages, activeId]);
+
+  const activeChannel = CHANNELS.find((c) => c.id === activeId)!;
+  const activeTyping = (typingByChannel[activeId] ?? []).filter((id) => id !== ME.id);
+
+  const toggleSetting = (k: keyof Settings) => setSettings((s) => ({ ...s, [k]: !s[k] }));
+  const toggleMute = (channelId: string) =>
+    setMuted((m) => {
+      const next = new Set(m);
+      if (next.has(channelId)) next.delete(channelId);
+      else next.add(channelId);
+      return next;
+    });
 
   return (
-    <section style={{ marginBottom: 16 }}>
-      <h3>Toasts</h3>
-      {toasts.length === 0 && <p style={{ opacity: 0.6 }}>(no toasts yet)</p>}
-      <ul style={{ listStyle: 'none', padding: 0 }}>
+    <>
+      <aside className="sidebar">
+        <h2>Channels</h2>
+        <ul className="channel-list">
+          {CHANNELS.map((c) => {
+            const badge = badges[c.id]?.count ?? 0;
+            const isMuted = muted.has(c.id);
+            return (
+              <li
+                key={c.id}
+                className={`channel-row ${c.id === activeId ? 'active' : ''} ${isMuted ? 'muted' : ''}`}
+                onClick={() => setActiveId(c.id)}
+              >
+                <span className="hash">#</span>
+                <span>{c.name}</span>
+                {badge > 0 && <span className="badge">{badge}</span>}
+                <button
+                  className="mute-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleMute(c.id);
+                  }}
+                  title={isMuted ? 'unmute' : 'mute'}
+                >
+                  {isMuted ? '🔕' : '🔔'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="user-strip">
+          <span className="avatar">{ME.avatar}</span>
+          <span className="name">{ME.name}</span>
+          <span className={`conn ${conn}`}>{conn}</span>
+        </div>
+      </aside>
+
+      <main className="main">
+        <header className="main-header">
+          <span className="hash">#</span>
+          <span className="channel-name">{activeChannel.name}</span>
+          <span className="topic">{activeChannel.topic}</span>
+        </header>
+        <div className="message-list" ref={messageListRef}>
+          {(messages[activeId] ?? []).length === 0 && (
+            <p className="empty">No messages in #{activeChannel.name} yet.</p>
+          )}
+          {(messages[activeId] ?? []).map((m) => (
+            <div key={m.id} className="message-row">
+              <span className="avatar">{m.author.avatar}</span>
+              <div>
+                <div>
+                  <span className="author" style={{ color: m.author.color }}>
+                    {m.author.name}
+                  </span>
+                  <span className="time">{fmtTime(m.emittedAt)}</span>
+                </div>
+                <div className="body">
+                  {m.mentions.includes(ME.id) ? (
+                    <>
+                      {m.text.split('@me').map((part, i) =>
+                        i === 0 ? part : (
+                          <span key={i}>
+                            <span className="mention">@me</span>
+                            {part}
+                          </span>
+                        ),
+                      )}
+                    </>
+                  ) : (
+                    m.text
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="typing-bar">
+          {activeTyping.length > 0 && (
+            <>
+              <span>
+                {activeTyping
+                  .map((id) => USERS.find((u) => u.id === id)?.name ?? id)
+                  .join(', ')}{' '}
+                is typing
+              </span>
+              <span style={{ marginLeft: 4 }}>
+                <span className="dot" />
+                <span className="dot" />
+                <span className="dot" />
+              </span>
+            </>
+          )}
+        </div>
+      </main>
+
+      <aside className="right-panel">
+        <section className="section">
+          <h3>Settings</h3>
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.notifications}
+              onChange={() => toggleSetting('notifications')}
+            />
+            Show toasts
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.sound}
+              onChange={() => toggleSetting('sound')}
+            />
+            Play sound
+          </label>
+          <label>
+            <input type="checkbox" checked={settings.dnd} onChange={() => toggleSetting('dnd')} />
+            Do not disturb
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.mentionsOnly}
+              onChange={() => toggleSetting('mentionsOnly')}
+            />
+            Mentions only
+          </label>
+        </section>
+
+        <section className="section">
+          <h3>Simulator</h3>
+          <div className="button-row">
+            <button onClick={() => setAuto((a) => !a)} className={auto ? 'primary' : ''}>
+              {auto ? '⏸ Stop auto-stream' : '▶ Start auto-stream'}
+            </button>
+            <span className="hint">One message every 1.5 s from a random user</span>
+            <button
+              onClick={() => fireMessage(makeMessage({ channelId: CHANNELS[(Math.random() * CHANNELS.length) | 0]!.id }))}
+            >
+              📨 One random message
+            </button>
+            <button
+              onClick={() =>
+                fireMessage(
+                  makeMessage({
+                    channelId: CHANNELS[(Math.random() * CHANNELS.length) | 0]!.id,
+                    mention: true,
+                  }),
+                )
+              }
+            >
+              📣 @-mention me
+            </button>
+            <span className="hint">Mentions override DND + mentions-only</span>
+            <button
+              onClick={() => {
+                for (let i = 0; i < 10; i++) {
+                  setTimeout(
+                    () =>
+                      fireMessage(
+                        makeMessage({
+                          channelId: CHANNELS[(Math.random() * CHANNELS.length) | 0]!.id,
+                        }),
+                      ),
+                    i * 50,
+                  );
+                }
+              }}
+            >
+              💥 Burst of 10
+            </button>
+            <span className="hint">Throttle drops most; only ~3 toasts/sec</span>
+            <button onClick={() => simulator.makeTyping(3)}>⌨️ Someone is typing</button>
+            <button onClick={() => simulator.simulateDisconnect()} className="danger">
+              ⚡ Disconnect 2 s
+            </button>
+          </div>
+        </section>
+
+        <section className="section">
+          <h3>Sound log (debounced 600 ms)</h3>
+          <ul className="sound-log">
+            {sounds.length === 0 && <li className="empty">silence</li>}
+            {sounds.map((s) => (
+              <li key={s.id}>
+                <span className="time">{fmtTime(s.time)}</span>
+                <span>
+                  {s.sound === 'beep' ? '🔔' : s.sound === 'mention' ? '📣' : '🔌'} {s.sound}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </aside>
+
+      <div className="toast-layer">
         {toasts.map((t) => (
-          <li
-            key={t.id}
-            style={{
-              padding: 8,
-              marginBottom: 4,
-              border: '1px solid #ccc',
-              borderRadius: 6,
-              background: '#f7f7f7',
-            }}
-          >
-            <strong>{t.title}</strong>: {t.body}
-          </li>
+          <div key={t.id} className={`toast ${t.kind}`}>
+            {t.kind !== 'system' && t.authorAvatar && (
+              <span className="avatar" style={{ background: t.authorColor }}>
+                {t.authorAvatar}
+              </span>
+            )}
+            <div className="body-col">
+              <div className="row-1">
+                <span className="name">{t.title}</span>
+                {t.channelId && <span className="channel">#{t.channelId}</span>}
+              </div>
+              <div className="body">{t.body}</div>
+            </div>
+          </div>
         ))}
-      </ul>
-    </section>
-  );
-}
-
-function BadgePanel({ engine }: { engine: Engine }) {
-  const [counts, setCounts] = useState<Record<string, number>>({});
-
-  useEffect(
-    () =>
-      engine.onIncrementBadge((channelId) => {
-        setCounts((c) => ({ ...c, [channelId]: (c[channelId] ?? 0) + 1 }));
-      }),
-    [engine],
-  );
-
-  return (
-    <section style={{ marginBottom: 16 }}>
-      <h3>Unread badges</h3>
-      {Object.keys(counts).length === 0 && <p style={{ opacity: 0.6 }}>(no unread)</p>}
-      <ul>
-        {Object.entries(counts).map(([ch, n]) => (
-          <li key={ch}>
-            #{ch}: <strong>{n}</strong>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function SoundLog({ engine }: { engine: Engine }) {
-  const [beeps, setBeeps] = useState<string[]>([]);
-
-  useEffect(
-    () =>
-      engine.onPlaySound((sound: Sound) => {
-        setBeeps((b) => [`${new Date().toLocaleTimeString()} ${sound}`, ...b].slice(0, 5));
-      }),
-    [engine],
-  );
-
-  return (
-    <section>
-      <h3>Sound log (debounced 800 ms)</h3>
-      {beeps.length === 0 && <p style={{ opacity: 0.6 }}>(silence)</p>}
-      <ul>
-        {beeps.map((b) => (
-          <li key={b}>{b}</li>
-        ))}
-      </ul>
-    </section>
+      </div>
+    </>
   );
 }

@@ -1,8 +1,8 @@
 | engine | LOC | bytes |
 |---|---:|---:|
-| naked        |   52 |  2224 |
-| reatom       |   58 |  2946 |
-| triggery     |   71 |  3193 |
-| effector     |   75 |  3667 |
-| rxjs         |   89 |  3456 |
-| rtk-listener |   97 |  3994 |
+| naked        |  136 |  5102 |
+| reatom       |  162 |  6347 |
+| effector     |  192 |  8168 |
+| rxjs         |  198 |  7806 |
+| triggery     |  215 |  8618 |
+| rtk-listener |  224 |  9033 |

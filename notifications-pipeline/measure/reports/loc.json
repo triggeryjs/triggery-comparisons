@@ -1,35 +1,35 @@
 {
-  "measuredAt": "2026-05-17T22:40:08.766Z",
+  "measuredAt": "2026-05-17T23:13:22.591Z",
   "rows": [
     {
       "engine": "naked",
-      "loc": 52,
-      "bytes": 2224
+      "loc": 136,
+      "bytes": 5102
     },
     {
       "engine": "reatom",
-      "loc": 58,
-      "bytes": 2946
-    },
-    {
-      "engine": "triggery",
-      "loc": 71,
-      "bytes": 3193
+      "loc": 162,
+      "bytes": 6347
     },
     {
       "engine": "effector",
-      "loc": 75,
-      "bytes": 3667
+      "loc": 192,
+      "bytes": 8168
     },
     {
       "engine": "rxjs",
-      "loc": 89,
-      "bytes": 3456
+      "loc": 198,
+      "bytes": 7806
+    },
+    {
+      "engine": "triggery",
+      "loc": 215,
+      "bytes": 8618
     },
     {
       "engine": "rtk-listener",
-      "loc": 97,
-      "bytes": 3994
+      "loc": 224,
+      "bytes": 9033
     }
   ]
 }
