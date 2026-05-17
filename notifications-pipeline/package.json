@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "measure:loc": "node measure/loc.mjs",
     "measure:bundle": "node measure/bundle.mjs",
-    "measure": "pnpm run measure:loc && pnpm run measure:bundle"
+    "measure:code": "node measure/code.mjs",
+    "measure:perf": "tsx measure/perf.ts",
+    "measure": "pnpm run measure:loc && pnpm run measure:bundle && pnpm run measure:code && pnpm run measure:perf"
   },
   "dependencies": {
     "@reatom/core": "^3.10.3",
@@ -29,6 +31,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "esbuild": "^0.25.12",
+    "tsx": "^4.22.1",
     "typescript": "^6.0.3",
     "vite": "^8.0.13"
   }

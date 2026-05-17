@@ -46,15 +46,16 @@ const output = <A extends unknown[]>() => {
   };
 };
 
-export const triggeryFactory: EngineFactory = {
+export const createTriggeryFactory = (opts: { schedule?: 'microtask' | 'sync' } = {}): EngineFactory => ({
   meta: {
     id: 'triggery',
-    label: 'Triggery',
+    label: opts.schedule === 'sync' ? 'Triggery (fireSync)' : 'Triggery',
     description: 'Two triggers + plain typing fan-out. Handlers read like a spec.',
     sourcePath: 'notifications-pipeline/src/engines/triggery.ts',
   },
   create(): Engine {
     const runtime = createRuntime({ inspector: false });
+    const schedule = opts.schedule ?? 'microtask';
 
     let settings: Settings | null = null;
     let activeChannelId: string | null = null;
@@ -75,6 +76,7 @@ export const triggeryFactory: EngineFactory = {
         events: ['new-message', 'channel-changed'],
         required: ['settings', 'currentUser'],
         concurrency: 'take-latest',
+        schedule,
         handler({ event, conditions, actions, check }) {
           if (event.name === 'channel-changed') {
             const id = event.payload;
@@ -120,6 +122,7 @@ export const triggeryFactory: EngineFactory = {
         id: 'conn',
         events: ['connection-changed'],
         required: ['previous'],
+        schedule,
         handler({ event, conditions, actions }) {
           const next = event.payload;
           const prev = conditions.previous;
@@ -181,7 +184,10 @@ export const triggeryFactory: EngineFactory = {
       dispose: () => runtime.dispose(),
     };
   },
-};
+});
+
+export const triggeryFactory = createTriggeryFactory();
+export const triggerySyncFactory = createTriggeryFactory({ schedule: 'sync' });
 
 const systemToast = (title: string, body: string): ToastPayload => ({
   id: `sys-${Date.now()}`,

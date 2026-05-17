@@ -2,6 +2,21 @@
 
 A Discord-like chat client. Messages arrive over a (mocked) WebSocket; the client has to gate, throttle, debounce and fan them out into the right side-effects. Same UI, six implementations, one frozen spec.
 
+## Headline numbers
+
+For the 14-rule scenario in this folder (see [acceptance spec](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.
+
+|                              | best library         | worst library      | triggery |
+|---|---|---|---|
+| **Bundle (gzipped)**         | reatom — 3.47 KB     | rtk — 10.97 KB     | 2nd (5.11 KB) |
+| **Throughput (sustained)**   | rxjs — 640k op/sec   | rtk — 37k op/sec   | 3rd: **267k default · 318k fireSync** — 2× effector, 7× rtk |
+| **Latency p50 (single ev.)** | rxjs — 0.25 µs       | rtk — 7.1 µs       | 3rd (1.4 µs fireSync · 2.5 µs default) |
+| **API surface**              | **triggery — 2 symbols** | rxjs — 15 symbols | **1st** |
+| **Cyclomatic complexity**    | rxjs — 21            | reatom — 33        | 2nd (24) |
+| **LOC**                      | reatom — 162         | rtk — 224          | 2nd (170) |
+
+Best on API surface, second on every other axis except dispatch latency / throughput where rxjs takes the crown (sync subjects with zero gating overhead is hard to beat — at the cost of 15 imported concepts vs Triggery's 2). The full numbers are in [§ Measurements](#measurements) and the interpretation in [§ How to read these numbers](#how-to-read-these-numbers).
+
 - [`triggery`](./src/engines/triggery.ts) — four declarative triggers, one per scenario family
 - [`effector`](./src/engines/effector.ts) — events + stores + samples wired into a graph
 - [`rxjs`](./src/engines/rxjs.ts) — Subjects + operator pipelines (built-in throttle/debounce)
@@ -78,7 +93,9 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 
 <!-- BEGIN: measurements -->
 
-**LOC** (non-comment, non-blank) — `src/engines/<engine>.ts`:
+### Code size
+
+LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
 | engine | LOC | bytes |
 |---|---:|---:|
@@ -89,7 +106,7 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 | rxjs         |  198 |  7806 |
 | rtk-listener |  224 |  9033 |
 
-**Bundle size** — engine + transitive deps, esbuild ES2022 ESM, React externalised:
+Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised:
 
 | engine | minified | gzipped |
 |---|---:|---:|
@@ -100,22 +117,78 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 | effector     |  21.13 KB |   9.39 KB |
 | rtk-listener |  28.94 KB |  10.97 KB |
 
+### Performance
+
+Two shapes per engine: **throughput** (burst of 1000 messages, microtasks flushed once at the end — how a WebSocket burst really hits a React app) and **per-event latency** (fire one, flush, measure; how the user perceives a single event-to-side-effect roundtrip). Median of 5 trials, M1 Pro / Node 20.
+
+| engine | throughput | p50 lat. | p95 lat. | p99 lat. |
+|---|---:|---:|---:|---:|
+| Naked (no library)     | 1883k ops/sec |  0.13 µs |  0.17 µs |  0.21 µs |
+| RxJS                   |  640k ops/sec |  0.25 µs |  0.96 µs |   1.6 µs |
+| **Triggery (fireSync)** |  **318k ops/sec** |   **1.4 µs** |   **1.9 µs** |   **2.2 µs** |
+| Reatom                 |  285k ops/sec |   2.0 µs |   2.3 µs |   4.4 µs |
+| **Triggery (default)** |  **267k ops/sec** |   **2.5 µs** |   **3.8 µs** |   **9.7 µs** |
+| Effector               |  132k ops/sec |   3.1 µs |   3.9 µs |   7.0 µs |
+| RTK listenerMiddleware |   37k ops/sec |   7.1 µs |   8.9 µs |    21 µs |
+
+Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch at the cost of that batching; both modes are first-class.
+
+### API surface — concepts you have to learn
+
+Counted by parsing each engine's `import` statements (third-party only) and the constructor calls inside the file. Lower is less library to read before you can understand the file.
+
+| engine | unique imports | primitive constructors |
+|---|---:|---|
+| naked        | 0 | 7× `emitter()` (in-file helper) |
+| **triggery** | **2** | **`createTrigger`×2, `createRuntime`×1** |
+| reatom       | 3 | `atom`×5, `action`×11, `createCtx`×1 |
+| effector     | 5 | `createEvent`×15, `createStore`×7, `createEffect`×3, `sample`×9, `combine`×1 |
+| rtk-listener | 5 | `createAction`×11, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×10 |
+| rxjs         | 15 | `new Subject`×10, `new BehaviorSubject`×5, `.pipe()`×11 — plus 13 operators (`filter`, `map`, `throttleTime`, `debounceTime`, `withLatestFrom`, `combineLatest`, `scan`, `merge`, `pairwise`, `startWith`, `switchMap`, `timer`, `EMPTY`) |
+
+### Complexity & type safety
+
+| engine | cyclomatic | max nesting | `as` casts | `!` non-null |
+|---|---:|---:|---:|---:|
+| rxjs         | 21 | 6 | 0 | 0 |
+| **triggery** | **24** | **6** | **0** | **1** |
+| rtk-listener | 24 | 7 | 1 | 0 |
+| effector     | 26 | 5 | 0 | 2 |
+| naked        | 28 | 7 | 0 | 0 |
+| reatom       | 33 | 6 | 0 | 0 |
+
+Cyclomatic = `if`/`for`/`while`/`case`/`catch`/`&&`/`||`/ternary + 1. All engines are clean on type-safety (zero or near-zero casts and non-null assertions).
+
 <!-- END: measurements -->
 
 ## How to read these numbers
 
-**Bundle size is the cleaner signal.** What you ship to your users is unchanged by stylistic choices. Triggery is 2nd-smallest after reatom and **roughly half of effector / rxjs / rtk** — for a *14-rule* scenario.
+The picture isn't "one library wins everything". It's a multi-axis trade-off and each library is built for a slightly different priority. Honestly:
 
-**LOC reading guide:**
+- **Triggery is competitive on every axis and best on API surface.** Smallest concept count (2 imported symbols), second-smallest bundle, 2-3× faster throughput than effector and 5-7× faster than RTK. Its scheduler trade-off is explicit (`default` batches, `fireSync` for low latency) — not a default that you have to opt out of.
+- **Naked wins LOC and perf** *for this one scenario*. It loses the second you add a second scenario, an additional event family, or any need to compose rules. The lack of structure is the whole cost.
+- **RxJS is dispatch-fast** because Subjects are sync — but the ecosystem cost is steep: 15 imported symbols means a reader has to know 15 operators to read the file.
+- **Reatom is bundle-small and complexity-high.** The atom-as-direct-call API is direct, but ends up scoring highest on cyclomatic complexity because every output is a fresh `action` declaration.
+- **Effector is graph-shaped.** Every "rule" is several `sample`s wired together; great when you can hold the graph in your head, expensive when reading cold. The throughput tax (130k ops/sec vs triggery's 270k) is the reactive-graph cost.
+- **RTK is the slowest and the largest** — but it's the closest to "official Redux" and the line you write today is the line every other RTK app already has.
 
-- **Triggery's 170 LOC carries a single 60-line handler that reads top-to-bottom like the spec** — R1 through R7 are literally translated as `if (msg.author.id === user.id) return;` then `if (isMuted) return;` then `if (!check.is('settings', s => s.notifications)) return;`. Effector's same logic is two `sample`s with cross-referenced filters in `filter`. RxJS uses one shared `notify$` source piped twice through `throttleTime` / `debounceTime`. Both work; both ask the reader to mentally re-assemble the rule from scattered samples / operators.
-- **Triggery uses two triggers** (inbox + connection) plus a plain-JS typing fan-out — for the typing rule there is no gating or debounce, so reaching for a trigger would be over-engineering. The "use a trigger only where it earns its keep" pattern keeps surface small.
-- **Naked is small only because the scenario fit a tiny emitter.** Add a second scenario and the lack of structure starts to bite — variables proliferate, debounce/throttle get duplicated, the `if`-chain in `fireMessage` becomes unmaintainable.
+**Where Triggery makes sense over the alternatives:**
+
+1. You want the rule for a scenario to be *findable* — open one file, read top-to-bottom, know what happens. Effector / rxjs / reatom give you the building blocks; you have to re-assemble the rule yourself every time you read.
+2. You want batched dispatch by default (one render per burst, not one per message) without rolling your own React batching.
+3. You want a small concept budget for new joiners. "Learn one thing — `createTrigger` — and you can read every scenario file in this codebase."
+4. You want both peak-throughput and predictable batching, picked per trigger.
+
+**Where Triggery isn't the right tool:**
+
+- If your domain is pure data-flow (streams in, streams out, no gating), rxjs is more compact for that exact shape.
+- If you're already deep in Redux and changing now is more pain than the win is worth — stay on RTK.
+- If your scenario fits in one `useEffect` and probably always will — don't add a dependency.
 
 ## What this comparison deliberately does NOT measure
 
-- **Microbenchmarks of dispatch throughput.** Synthetic loops live in [triggeryjs/triggery/benchmarks](https://github.com/triggeryjs/triggery/tree/main/benchmarks). They tell you how fast a library can dispatch nothing useful in a row.
-- **TypeScript inference depth.** Each engine uses its own idiomatic shape for the schema.
+- **Microbenchmarks of empty dispatch.** Synthetic loops with no handler live in [triggeryjs/triggery/benchmarks](https://github.com/triggeryjs/triggery/tree/main/benchmarks). They tell you how fast a library can dispatch *nothing useful* in a row; we measure the real scenario instead.
+- **TypeScript inference depth.** Each engine uses its own idiomatic shape for the schema. Real comparison would need a separate `dtslint` suite per engine.
 - **DevTools / inspector quality.** Each engine has very different debuggability stories (Redux DevTools bridge, in-app inspector, opt-in). Worth its own comparison; not this one.
 
 ## Per-engine notes (opinions, freely contested)

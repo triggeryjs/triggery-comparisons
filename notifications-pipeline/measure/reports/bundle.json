@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-17T23:30:15.589Z",
+  "measuredAt": "2026-05-17T23:48:49.646Z",
   "rows": [
     {
       "engine": "naked",
@@ -13,8 +13,8 @@
     },
     {
       "engine": "triggery",
-      "minBytes": 14272,
-      "gzipBytes": 5230
+      "minBytes": 14459,
+      "gzipBytes": 5290
     },
     {
       "engine": "effector",

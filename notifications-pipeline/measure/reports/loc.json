@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-17T23:30:15.147Z",
+  "measuredAt": "2026-05-17T23:48:49.148Z",
   "rows": [
     {
       "engine": "naked",
@@ -13,8 +13,8 @@
     },
     {
       "engine": "triggery",
-      "loc": 170,
-      "bytes": 7002
+      "loc": 175,
+      "bytes": 7337
     },
     {
       "engine": "effector",

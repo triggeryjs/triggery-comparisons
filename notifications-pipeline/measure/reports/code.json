@@ -1,0 +1,95 @@
+{
+  "measuredAt": "2026-05-17T23:48:49.912Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "importedSources": 0,
+      "importedSymbols": 0,
+      "primitives": {
+        "emitter": 7
+      },
+      "primitivesTotal": 7,
+      "cyclo": 28,
+      "nesting": 7,
+      "asCasts": 0,
+      "nonNull": 0
+    },
+    {
+      "engine": "triggery",
+      "importedSources": 1,
+      "importedSymbols": 2,
+      "primitives": {
+        "createTrigger": 2,
+        "createRuntime": 1
+      },
+      "primitivesTotal": 3,
+      "cyclo": 24,
+      "nesting": 6,
+      "asCasts": 0,
+      "nonNull": 1
+    },
+    {
+      "engine": "reatom",
+      "importedSources": 1,
+      "importedSymbols": 3,
+      "primitives": {
+        "atom": 5,
+        "action": 11,
+        "createCtx": 1
+      },
+      "primitivesTotal": 17,
+      "cyclo": 33,
+      "nesting": 6,
+      "asCasts": 0,
+      "nonNull": 0
+    },
+    {
+      "engine": "effector",
+      "importedSources": 1,
+      "importedSymbols": 5,
+      "primitives": {
+        "createEvent": 15,
+        "createStore": 7,
+        "createEffect": 3,
+        "sample": 9,
+        "combine": 1
+      },
+      "primitivesTotal": 35,
+      "cyclo": 26,
+      "nesting": 5,
+      "asCasts": 0,
+      "nonNull": 2
+    },
+    {
+      "engine": "rtk-listener",
+      "importedSources": 1,
+      "importedSymbols": 5,
+      "primitives": {
+        "createAction": 11,
+        "createSlice": 1,
+        "createListenerMiddleware": 1,
+        "startListening": 10
+      },
+      "primitivesTotal": 23,
+      "cyclo": 24,
+      "nesting": 7,
+      "asCasts": 1,
+      "nonNull": 0
+    },
+    {
+      "engine": "rxjs",
+      "importedSources": 1,
+      "importedSymbols": 15,
+      "primitives": {
+        "Subject": 10,
+        "BehaviorSubject": 5,
+        ".pipe(": 11
+      },
+      "primitivesTotal": 26,
+      "cyclo": 21,
+      "nesting": 6,
+      "asCasts": 0,
+      "nonNull": 0
+    }
+  ]
+}
