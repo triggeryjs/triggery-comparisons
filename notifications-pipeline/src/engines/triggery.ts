@@ -1,9 +1,10 @@
-// Triggery — four triggers, one per scenario family. Each handler reads
-// top-to-bottom like a spec. Conditions are pushed in via runtime setters
-// captured in closures; actions fan out through registered handlers.
+// Triggery — two declarative triggers describe the orchestration. Typing
+// indicator is plain in/out (no gating, no debounce — no need for a trigger).
+// Conditions are pushed in via getters captured in closures; actions fan out
+// through a tiny `output<>()` helper.
 
 import { createRuntime, createTrigger } from '@triggery/core';
-import type { Engine, EngineFactory } from '../engine';
+import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import type {
   ConnectionState,
   Message,
@@ -14,8 +15,8 @@ import type {
   User,
 } from '../types';
 
-type MessageSchema = {
-  events: { 'new-message': Message };
+type Inbox = {
+  events: { 'new-message': Message; 'channel-changed': string | null };
   conditions: {
     settings: Settings;
     activeChannelId: string | null;
@@ -26,35 +27,30 @@ type MessageSchema = {
     showToast: ToastPayload;
     playSound: Sound;
     incrementBadge: { channelId: string; muted: boolean };
+    markRead: string;
+    clearBadge: string;
   };
 };
 
-type ChannelSchema = {
-  events: { 'channel-changed': string | null };
-  conditions: Record<string, never>;
-  actions: { markRead: string; clearBadge: string };
-};
-
-type TypingSchema = {
-  events: {
-    'typing-start': { userId: string; channelId: string };
-    'typing-stop': { userId: string; channelId: string };
-  };
-  conditions: Record<string, never>;
-  actions: { typingChange: TypingUpdate };
-};
-
-type ConnectionSchema = {
+type Conn = {
   events: { 'connection-changed': ConnectionState };
   conditions: { previous: ConnectionState };
   actions: { showToast: ToastPayload; playSound: Sound };
+};
+
+const output = <A extends unknown[]>() => {
+  const subs = new Set<(...a: A) => void>();
+  return {
+    emit: (...a: A) => { for (const cb of subs) cb(...a); },
+    on: (cb: (...a: A) => void): Unsubscribe => (subs.add(cb), () => subs.delete(cb)),
+  };
 };
 
 export const triggeryFactory: EngineFactory = {
   meta: {
     id: 'triggery',
     label: 'Triggery',
-    description: 'One trigger per scenario family, each handler reads as a spec.',
+    description: 'Two triggers + plain typing fan-out. Handlers read like a spec.',
     sourcePath: 'notifications-pipeline/src/engines/triggery.ts',
   },
   create(): Engine {
@@ -65,26 +61,33 @@ export const triggeryFactory: EngineFactory = {
     let currentUser: User | null = null;
     let mutedChannels: ReadonlySet<string> = new Set();
     let previousConn: ConnectionState = 'connecting';
-    const typingByChannel = new Map<string, Set<string>>();
 
-    const subs = {
-      toast: new Set<(t: ToastPayload) => void>(),
-      sound: new Set<(s: Sound) => void>(),
-      incBadge: new Set<(channelId: string, muted: boolean) => void>(),
-      clearBadge: new Set<(channelId: string) => void>(),
-      typing: new Set<(u: TypingUpdate) => void>(),
-      markRead: new Set<(channelId: string) => void>(),
-    };
+    const toast = output<[ToastPayload]>();
+    const sound = output<[Sound]>();
+    const incBadge = output<[string, boolean]>();
+    const clearBadge = output<[string]>();
+    const typing = output<[TypingUpdate]>();
+    const markRead = output<[string]>();
 
-    const messageTrigger = createTrigger<MessageSchema>(
+    const inbox = createTrigger<Inbox>(
       {
-        id: 'message-received',
-        events: ['new-message'],
+        id: 'inbox',
+        events: ['new-message', 'channel-changed'],
         required: ['settings', 'currentUser'],
+        concurrency: 'take-latest',
         handler({ event, conditions, actions, check }) {
+          if (event.name === 'channel-changed') {
+            const id = event.payload;
+            if (id != null) {
+              actions.defer(2000).markRead?.(id);
+              actions.defer(2000).clearBadge?.(id);
+            }
+            return;
+          }
+
           const msg = event.payload;
-          const user = conditions.currentUser;
-          if (!user || msg.author.id === user.id) return;
+          const user = conditions.currentUser!;
+          if (msg.author.id === user.id) return;
 
           const isMention = msg.mentions.includes(user.id);
           const isMuted = conditions.mutedChannels?.has(msg.channelId) ?? false;
@@ -112,44 +115,9 @@ export const triggeryFactory: EngineFactory = {
       runtime,
     );
 
-    const channelTrigger = createTrigger<ChannelSchema>(
+    const conn = createTrigger<Conn>(
       {
-        id: 'channel-changed',
-        events: ['channel-changed'],
-        concurrency: 'take-latest',
-        handler({ event, actions }) {
-          const id = event.payload;
-          if (id == null) return;
-          // 2s settled-read window: a later fire aborts this run via take-latest.
-          actions.defer(2000).markRead?.(id);
-          actions.defer(2000).clearBadge?.(id);
-        },
-      },
-      runtime,
-    );
-
-    const typingTrigger = createTrigger<TypingSchema>(
-      {
-        id: 'typing',
-        events: ['typing-start', 'typing-stop'],
-        handler({ event, actions }) {
-          const { userId, channelId } = event.payload;
-          let set = typingByChannel.get(channelId);
-          if (!set) {
-            set = new Set();
-            typingByChannel.set(channelId, set);
-          }
-          if (event.name === 'typing-start') set.add(userId);
-          else set.delete(userId);
-          actions.typingChange?.({ channelId, userIds: [...set] });
-        },
-      },
-      runtime,
-    );
-
-    const connectionTrigger = createTrigger<ConnectionSchema>(
-      {
-        id: 'connection',
+        id: 'conn',
         events: ['connection-changed'],
         required: ['previous'],
         handler({ event, conditions, actions }) {
@@ -157,21 +125,9 @@ export const triggeryFactory: EngineFactory = {
           const prev = conditions.previous;
           if (next === prev) return;
           if (next === 'disconnected') {
-            actions.showToast?.({
-              id: `sys-${Date.now()}`,
-              kind: 'system',
-              title: 'Connection lost',
-              body: 'Trying to reconnect…',
-              emittedAt: Date.now(),
-            });
+            actions.showToast?.(systemToast('Connection lost', 'Trying to reconnect…'));
           } else if (next === 'connected' && prev === 'disconnected') {
-            actions.showToast?.({
-              id: `sys-${Date.now()}`,
-              kind: 'system',
-              title: 'Reconnected',
-              body: '',
-              emittedAt: Date.now(),
-            });
+            actions.showToast?.(systemToast('Reconnected', ''));
             actions.playSound?.('reconnect');
           }
         },
@@ -179,43 +135,34 @@ export const triggeryFactory: EngineFactory = {
       runtime,
     );
 
-    runtime.registerCondition(messageTrigger.id, 'settings', () => settings);
-    runtime.registerCondition(messageTrigger.id, 'activeChannelId', () => activeChannelId);
-    runtime.registerCondition(messageTrigger.id, 'currentUser', () => currentUser);
-    runtime.registerCondition(messageTrigger.id, 'mutedChannels', () => mutedChannels);
-    runtime.registerCondition(connectionTrigger.id, 'previous', () => previousConn);
+    runtime.registerCondition(inbox.id, 'settings', () => settings);
+    runtime.registerCondition(inbox.id, 'activeChannelId', () => activeChannelId);
+    runtime.registerCondition(inbox.id, 'currentUser', () => currentUser);
+    runtime.registerCondition(inbox.id, 'mutedChannels', () => mutedChannels);
+    runtime.registerCondition(conn.id, 'previous', () => previousConn);
+    const wire = <K extends keyof Inbox['actions']>(name: K, fn: (p: Inbox['actions'][K]) => void) =>
+      runtime.registerAction(inbox.id, name, fn as (p: unknown) => void);
+    wire('showToast', toast.emit);
+    wire('playSound', sound.emit);
+    wire('incrementBadge', ({ channelId, muted }) => incBadge.emit(channelId, muted));
+    wire('markRead', markRead.emit);
+    wire('clearBadge', clearBadge.emit);
+    runtime.registerAction(conn.id, 'showToast', toast.emit as (p: unknown) => void);
+    runtime.registerAction(conn.id, 'playSound', sound.emit as (p: unknown) => void);
 
-    const fan = <A extends unknown[]>(set: Set<(...a: A) => void>, ...args: A) => {
-      for (const cb of set) cb(...args);
+    // Typing: pure fan-out, no gating/throttle → no trigger needed.
+    const typingByChannel = new Map<string, Set<string>>();
+    const trackTyping = (kind: 'add' | 'delete', userId: string, channelId: string) => {
+      let set = typingByChannel.get(channelId);
+      if (!set) typingByChannel.set(channelId, (set = new Set()));
+      set[kind](userId);
+      typing.emit({ channelId, userIds: [...set] });
     };
-    runtime.registerAction(messageTrigger.id, 'showToast', (p) =>
-      fan(subs.toast, p as ToastPayload),
-    );
-    runtime.registerAction(messageTrigger.id, 'playSound', (s) => fan(subs.sound, s as Sound));
-    runtime.registerAction(messageTrigger.id, 'incrementBadge', (p) => {
-      const { channelId, muted } = p as { channelId: string; muted: boolean };
-      fan(subs.incBadge, channelId, muted);
-    });
-    runtime.registerAction(channelTrigger.id, 'markRead', (id) =>
-      fan(subs.markRead, id as string),
-    );
-    runtime.registerAction(channelTrigger.id, 'clearBadge', (id) =>
-      fan(subs.clearBadge, id as string),
-    );
-    runtime.registerAction(typingTrigger.id, 'typingChange', (u) =>
-      fan(subs.typing, u as TypingUpdate),
-    );
-    runtime.registerAction(connectionTrigger.id, 'showToast', (p) =>
-      fan(subs.toast, p as ToastPayload),
-    );
-    runtime.registerAction(connectionTrigger.id, 'playSound', (s) =>
-      fan(subs.sound, s as Sound),
-    );
 
     return {
-      fireMessage: (msg) => runtime.fire('new-message', msg),
-      fireTypingStart: (p) => runtime.fire('typing-start', p),
-      fireTypingStop: (p) => runtime.fire('typing-stop', p),
+      fireMessage: (m) => runtime.fire('new-message', m),
+      fireTypingStart: (p) => trackTyping('add', p.userId, p.channelId),
+      fireTypingStop: (p) => trackTyping('delete', p.userId, p.channelId),
       fireChannelChanged: (id) => runtime.fire('channel-changed', id),
       setConnectionState: (s) => {
         runtime.fire('connection-changed', s);
@@ -225,13 +172,21 @@ export const triggeryFactory: EngineFactory = {
       setActiveChannel: (id) => (activeChannelId = id),
       setCurrentUser: (u) => (currentUser = u),
       setMutedChannels: (ids) => (mutedChannels = ids),
-      onShowToast: (cb) => (subs.toast.add(cb), () => subs.toast.delete(cb)),
-      onPlaySound: (cb) => (subs.sound.add(cb), () => subs.sound.delete(cb)),
-      onIncrementBadge: (cb) => (subs.incBadge.add(cb), () => subs.incBadge.delete(cb)),
-      onClearBadge: (cb) => (subs.clearBadge.add(cb), () => subs.clearBadge.delete(cb)),
-      onTypingChange: (cb) => (subs.typing.add(cb), () => subs.typing.delete(cb)),
-      onMarkChannelRead: (cb) => (subs.markRead.add(cb), () => subs.markRead.delete(cb)),
+      onShowToast: toast.on,
+      onPlaySound: sound.on,
+      onIncrementBadge: incBadge.on,
+      onClearBadge: clearBadge.on,
+      onTypingChange: typing.on,
+      onMarkChannelRead: markRead.on,
       dispose: () => runtime.dispose(),
     };
   },
 };
+
+const systemToast = (title: string, body: string): ToastPayload => ({
+  id: `sys-${Date.now()}`,
+  kind: 'system',
+  title,
+  body,
+  emittedAt: Date.now(),
+});

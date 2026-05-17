@@ -84,9 +84,9 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 |---|---:|---:|
 | naked        |  136 |  5102 |
 | reatom       |  162 |  6347 |
+| **triggery** | **170** | **7002** |
 | effector     |  192 |  8168 |
 | rxjs         |  198 |  7806 |
-| **triggery** | **215** | **8618** |
 | rtk-listener |  224 |  9033 |
 
 **Bundle size** — engine + transitive deps, esbuild ES2022 ESM, React externalised:
@@ -95,7 +95,7 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 |---|---:|---:|
 | naked        |   1.92 KB |   0.94 KB |
 | reatom       |   8.18 KB |   3.47 KB |
-| **triggery** |  **14.60 KB** |   **5.19 KB** |
+| **triggery** |  **13.94 KB** |   **5.11 KB** |
 | rxjs         |  28.74 KB |   9.03 KB |
 | effector     |  21.13 KB |   9.39 KB |
 | rtk-listener |  28.94 KB |  10.97 KB |
@@ -104,12 +104,12 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 
 ## How to read these numbers
 
-**Bundle size is the cleaner signal.** What you ship to your users is unchanged by stylistic choices — it's the cost of the library, full stop. Triggery is 2nd-smallest after reatom and **roughly half of effector / rxjs / rtk**.
+**Bundle size is the cleaner signal.** What you ship to your users is unchanged by stylistic choices. Triggery is 2nd-smallest after reatom and **roughly half of effector / rxjs / rtk** — for a *14-rule* scenario.
 
-**LOC requires more interpretation:**
+**LOC reading guide:**
 
-- **Triggery's 215 LOC carries ~25 lines of manual fan-out boilerplate** (a `subs` Set + a `fan()` helper for each of the six output actions) that effector / rxjs / reatom / rtk get for free from their framework (`event.watch`, `subject.subscribe`, `ctx.subscribe`, `listener.startListening`). The triggery v1 API only allows a single `registerAction` handler per action; we manually multiplex. With a small core-level addition this is one of the [top-priority gaps in the audit](https://github.com/triggeryjs/triggery/issues) — and would shave triggery from 215 → ~190.
-- **The "spec-shaped" handler of triggery reads top-to-bottom**, matching the natural-language spec almost line for line. Effector's same logic is split across three `sample`s with cross-referenced filters. RxJS uses one shared `notify$` source piped twice. Both work; both require holding more of the data flow in your head.
+- **Triggery's 170 LOC carries a single 60-line handler that reads top-to-bottom like the spec** — R1 through R7 are literally translated as `if (msg.author.id === user.id) return;` then `if (isMuted) return;` then `if (!check.is('settings', s => s.notifications)) return;`. Effector's same logic is two `sample`s with cross-referenced filters in `filter`. RxJS uses one shared `notify$` source piped twice through `throttleTime` / `debounceTime`. Both work; both ask the reader to mentally re-assemble the rule from scattered samples / operators.
+- **Triggery uses two triggers** (inbox + connection) plus a plain-JS typing fan-out — for the typing rule there is no gating or debounce, so reaching for a trigger would be over-engineering. The "use a trigger only where it earns its keep" pattern keeps surface small.
 - **Naked is small only because the scenario fit a tiny emitter.** Add a second scenario and the lack of structure starts to bite — variables proliferate, debounce/throttle get duplicated, the `if`-chain in `fireMessage` becomes unmaintainable.
 
 ## What this comparison deliberately does NOT measure
@@ -122,9 +122,9 @@ Numbers live in `measure/reports/` and are committed (diffs show up in PRs). Lat
 
 ### `triggery`
 
-Four triggers, one per event family (`message-received`, `channel-changed`, `typing`, `connection`). Each handler reads top-to-bottom like a natural-language spec — the R1-R7 chain in `messageTrigger` is literally a translation of "ignore your own messages, then increment badge, then gate, then throttle, then debounce". `actions.throttle(1000/3)` and `actions.debounce(600)` are first-class.
+Two triggers — `inbox` (handles both `new-message` for R1-R7 and `channel-changed` for R11, gated by `required: ['settings', 'currentUser']`) and `conn` (R12-R14 with `previous` condition). Typing (R8-R9) doesn't need a trigger — it's pure pass-through, so it lives as a five-line plain-JS fan-out.
 
-Lines lost: the fan-out boilerplate (see above) and the 4× `registerCondition` + `registerAction` calls that effector handles inline.
+The R1-R7 handler reads as a natural-language spec — `if (msg.author.id === user.id) return;` lines up with "ignore your own messages", `actions.throttle(1000/3).showToast?.(…)` with "throttle to 3/sec", `actions.debounce(600).playSound?.(…)` with "debounced 600 ms". `actions.defer(2000)` inside `channel-changed` does the settled-read window with one line.
 
 ### `effector`
 

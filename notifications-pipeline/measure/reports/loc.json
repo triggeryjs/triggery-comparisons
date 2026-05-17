@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-17T23:13:22.591Z",
+  "measuredAt": "2026-05-17T23:30:15.147Z",
   "rows": [
     {
       "engine": "naked",
@@ -12,6 +12,11 @@
       "bytes": 6347
     },
     {
+      "engine": "triggery",
+      "loc": 170,
+      "bytes": 7002
+    },
+    {
       "engine": "effector",
       "loc": 192,
       "bytes": 8168
@@ -20,11 +25,6 @@
       "engine": "rxjs",
       "loc": 198,
       "bytes": 7806
-    },
-    {
-      "engine": "triggery",
-      "loc": 215,
-      "bytes": 8618
     },
     {
       "engine": "rtk-listener",
