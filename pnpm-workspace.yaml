@@ -1,0 +1,6 @@
+packages:
+  - 'notifications-pipeline'
+  # Future scenarios go here:
+  # - 'debounced-search'
+  # - 'modal-stack'
+  # - 'wizard-form'

@@ -1,0 +1,35 @@
+{
+  "name": "triggery-comparison-notifications-pipeline",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "The same notifications scenario implemented in 5 orchestration libraries + a naked baseline, side by side. The shared UI is wired to whichever engine is selected via ?engine=… in the URL.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "measure:loc": "node measure/loc.mjs",
+    "measure:bundle": "node measure/bundle.mjs",
+    "measure": "pnpm run measure:loc && pnpm run measure:bundle"
+  },
+  "dependencies": {
+    "@reatom/core": "^3.10.3",
+    "@reduxjs/toolkit": "^2.12.0",
+    "@triggery/core": "^0.9.1",
+    "@triggery/react": "^0.9.1",
+    "effector": "^23.2.3",
+    "effector-react": "^23.2.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-redux": "^9.3.0",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "esbuild": "^0.25.12",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.13"
+  }
+}

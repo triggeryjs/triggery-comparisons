@@ -1,0 +1,35 @@
+{
+  "measuredAt": "2026-05-17T22:40:08.766Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "loc": 52,
+      "bytes": 2224
+    },
+    {
+      "engine": "reatom",
+      "loc": 58,
+      "bytes": 2946
+    },
+    {
+      "engine": "triggery",
+      "loc": 71,
+      "bytes": 3193
+    },
+    {
+      "engine": "effector",
+      "loc": 75,
+      "bytes": 3667
+    },
+    {
+      "engine": "rxjs",
+      "loc": 89,
+      "bytes": 3456
+    },
+    {
+      "engine": "rtk-listener",
+      "loc": 97,
+      "bytes": 3994
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "triggery-comparisons",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Side-by-side comparison of orchestration libraries — triggery, effector, rxjs, reatom, RTK listenerMiddleware and a naked baseline — implementing the same scenario.",
+  "license": "MIT",
+  "author": "Aleksey Skhomenko",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/triggeryjs/triggery-comparisons.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@9.3.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter notifications-pipeline dev",
+    "build": "pnpm -r build",
+    "measure": "pnpm -r measure"
+  }
+}

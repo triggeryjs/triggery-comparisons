@@ -1,0 +1,35 @@
+{
+  "measuredAt": "2026-05-17T22:40:09.293Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "minBytes": 776,
+      "gzipBytes": 489
+    },
+    {
+      "engine": "reatom",
+      "minBytes": 6775,
+      "gzipBytes": 3001
+    },
+    {
+      "engine": "triggery",
+      "minBytes": 12742,
+      "gzipBytes": 4630
+    },
+    {
+      "engine": "effector",
+      "minBytes": 19814,
+      "gzipBytes": 9014
+    },
+    {
+      "engine": "rxjs",
+      "minBytes": 24866,
+      "gzipBytes": 7732
+    },
+    {
+      "engine": "rtk-listener",
+      "minBytes": 27281,
+      "gzipBytes": 10509
+    }
+  ]
+}
