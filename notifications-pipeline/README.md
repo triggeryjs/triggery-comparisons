@@ -8,17 +8,17 @@ For the 15-rule scenario in this folder (see [acceptance spec](#acceptance-behav
 
 |                                | best library             | worst library      | triggery |
 |---|---|---|---|
-| **Bundle (gzipped)**           | reatom — 3.52 KB         | rtk — 11.03 KB     | 2nd (5.22 KB) |
-| **Throughput (sustained)**     | reatom — 246k op/sec     | rtk — 67k op/sec   | **2nd** (228k default · 284k fireSync) — 1.4× effector, 3.4× rtk |
-| **Latency p50 (single ev.)**   | rxjs — 0.25 µs           | rtk — 6.8 µs       | 3rd (2.4 µs fireSync · 2.6 µs default) |
+| **LOC**                        | **triggery — 155**       | rtk — 229          | **1st** |
 | **API surface**                | **triggery — 2 symbols** | rxjs — 15 symbols  | **1st** |
+| **Bundle (gzipped)**           | reatom — 3.52 KB         | rtk — 11.03 KB     | 2nd (5.81 KB) |
+| **Throughput (sustained)**     | reatom — 254k op/sec     | rtk — 71k op/sec   | **mixed**: 185k default (5th, microtask-batched for React) · **282k fireSync** (**1st library**) — 1.6× effector, 4.0× rtk |
+| **Latency p50 (single ev.)**   | rxjs — 0.21 µs           | rtk — 6.9 µs       | 3rd (2.3 µs fireSync · 2.5 µs default) |
 | **Cyclomatic complexity**      | rxjs — 24                | reatom — 35        | 2nd (25) |
-| **LOC**                        | reatom — 167             | rtk — 229          | 2nd (181) |
 | **Scaling cost (R15 → +LOC)**  | reatom / rtk — +5        | effector — +13     | **+6** (handler-shaped, same as naked baseline) |
 
-Best on API surface and scaling cost, second on every other axis except dispatch latency where rxjs wins (sync subjects with no gating overhead) — at the cost of 15 imported concepts vs Triggery's 2. The full numbers are in [§ Measurements](#measurements) and the interpretation in [§ How to read these numbers](#how-to-read-these-numbers).
+Best on LOC, API surface and (fireSync) sustained throughput; second on bundle and complexity; only beaten on per-event latency by rxjs's sync `Subject.next` — and that costs 15 imported concepts vs Triggery's 2. Default `microtask` mode trades raw throughput for one React render per burst (one batched commit instead of 1000) — an explicit, per-trigger choice rather than a forced default. The full numbers are in [§ Measurements](#measurements) and the interpretation in [§ How to read these numbers](#how-to-read-these-numbers).
 
-- [`triggery`](./src/engines/triggery.ts) — four declarative triggers, one per scenario family
+- [`triggery`](./src/engines/triggery.ts) — two declarative triggers + a plain-JS typing tracker
 - [`effector`](./src/engines/effector.ts) — events + stores + samples wired into a graph
 - [`rxjs`](./src/engines/rxjs.ts) — Subjects + operator pipelines (built-in throttle/debounce)
 - [`reatom`](./src/engines/reatom.ts) — atoms + actions, ctx-scoped state
@@ -105,8 +105,8 @@ LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 | engine | LOC | bytes |
 |---|---:|---:|
 | naked        |  142 |  5469 |
+| **triggery** | **155** | **6740** |
 | reatom       |  167 |  6672 |
-| **triggery** | **181** | **7760** |
 | effector     |  205 |  8713 |
 | rxjs         |  208 |  8335 |
 | rtk-listener |  229 |  9368 |
@@ -117,7 +117,7 @@ Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised
 |---|---:|---:|
 | naked        |   2.04 KB |   1.00 KB |
 | reatom       |   8.28 KB |   3.52 KB |
-| **triggery** |  **14.24 KB** |   **5.22 KB** |
+| **triggery** |  **25.55 KB** |   **5.81 KB** |
 | rxjs         |  28.93 KB |   9.11 KB |
 | effector     |  21.31 KB |   9.46 KB |
 | rtk-listener |  29.04 KB |  11.03 KB |
@@ -128,17 +128,17 @@ Two shapes per engine: **throughput** (burst of 1000 messages, microtasks flushe
 
 | engine | throughput | p50 lat. | p95 lat. | p99 lat. |
 |---|---:|---:|---:|---:|
-| Naked (no library)     |  612k ops/sec |  0.13 µs |  0.17 µs |  0.25 µs |
-| **Triggery (fireSync)**|  **284k ops/sec** |   **2.4 µs** |    20 µs |    41 µs |
-| Reatom                 |  246k ops/sec |   1.9 µs |   2.9 µs |   4.0 µs |
-| **Triggery (default)** |  **228k ops/sec** |   **2.6 µs** |   **3.8 µs** |    11 µs |
-| RxJS                   |  183k ops/sec |  0.25 µs |  0.75 µs |   2.0 µs |
-| Effector               |  158k ops/sec |   2.7 µs |   5.8 µs |   9.7 µs |
-| RTK listenerMiddleware |   67k ops/sec |   6.8 µs |   9.4 µs |    16 µs |
+| Naked (no library)     |  655k ops/sec |  0.13 µs |  0.17 µs |  0.25 µs |
+| **Triggery (fireSync)**|  **282k ops/sec** |   **2.3 µs** |    20 µs |    38 µs |
+| Reatom                 |  254k ops/sec |   1.9 µs |   2.8 µs |   3.8 µs |
+| RxJS                   |  219k ops/sec |  0.21 µs |  0.33 µs |  0.83 µs |
+| **Triggery (default)** |  **185k ops/sec** |   **2.5 µs** |   **3.3 µs** |   **9.3 µs** |
+| Effector               |  177k ops/sec |   2.6 µs |   5.9 µs |    18 µs |
+| RTK listenerMiddleware |   71k ops/sec |   6.9 µs |   8.6 µs |    20 µs |
 
-Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch at the cost of that batching; both modes are first-class.
+Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch and lands second-fastest sustained throughput in the entire matrix — 1.6× effector, 4.0× rtk. Both modes are first-class.
 
-> rxjs's per-event latency p50 (0.25 µs) reflects sync `Subject.next` with no gating — but throughput drops 8× when the same 15 rules run through its operator pipeline. Triggery wins on the sustained-throughput side of the trade-off.
+> rxjs's per-event latency p50 (0.21 µs) reflects sync `Subject.next` with no gating — but its sustained throughput (219k) is still below Triggery's fireSync (282k) once the 15 gating/throttle/debounce rules run through the operator pipeline. Triggery wins on the burst side; rxjs wins on the single-event-latency side.
 
 ### API surface — concepts you have to learn
 
@@ -147,7 +147,7 @@ Counted by parsing each engine's `import` statements (third-party only) and the 
 | engine | unique imports | primitive constructors |
 |---|---:|---|
 | naked        | 0 | 7× `emitter()` (in-file helper) |
-| **triggery** | **2** | **`createTrigger`×2, `createRuntime`×1** |
+| **triggery** | **2** | **`createTrigger`×2, `createRuntime`×1, `.action()`×7** |
 | reatom       | 3 | `atom`×5, `action`×11, `createCtx`×1 |
 | effector     | 5 | `createEvent`×15, `createStore`×8, `createEffect`×3, `sample`×9, `combine`×1 |
 | rtk-listener | 5 | `createAction`×11, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×10 |
@@ -158,7 +158,7 @@ Counted by parsing each engine's `import` statements (third-party only) and the 
 | engine | cyclomatic | max nesting | `as` casts | `!` non-null |
 |---|---:|---:|---:|---:|
 | rxjs         | 24 | 6 | 0 | 0 |
-| **triggery** | **25** | **6** | **0** | **1** |
+| **triggery** | **25** | **5** | **0** | **0** |
 | rtk-listener | 25 | 7 | 1 | 0 |
 | naked        | 29 | 7 | 0 | 0 |
 | effector     | 29 | 5 | 0 | 2 |
@@ -172,7 +172,7 @@ We measured the **incremental cost** of adding the spam-protection rule (R15) on
 
 | engine | base LOC | + R15 | Δ | shape of the change |
 |---|---:|---:|---:|---|
-| **triggery** | 175 | **181** | **+6** | one extra `if`-block in the handler |
+| **triggery** | 149 | **155** | **+6** | one extra `if`-block in the handler |
 | naked        | 136 | 142 | +6 | one extra `if`-block in `fireMessage` |
 | reatom       | 162 | 167 | +5 | one extra `if`-block in the `newMessage` action |
 | rtk-listener | 224 | 229 | +5 | one extra `if`-block in the listener effect |
@@ -187,11 +187,11 @@ We measured the **incremental cost** of adding the spam-protection rule (R15) on
 
 The picture isn't "one library wins everything". It's a multi-axis trade-off and each library is built for a slightly different priority. Honestly:
 
-- **Triggery is competitive on every axis and best on API surface.** Smallest concept count (2 imported symbols), second-smallest bundle, 2-3× faster throughput than effector and 5-7× faster than RTK. Its scheduler trade-off is explicit (`default` batches, `fireSync` for low latency) — not a default that you have to opt out of.
+- **Triggery is competitive on every axis and best on LOC + API surface.** Smallest concept count (2 imported symbols), second-smallest bundle, and — in `fireSync` mode — fastest sustained throughput of any library (1.6× effector, 4× RTK). The scheduler trade-off is explicit per trigger (`default` batches for React, `fireSync` for low latency) — not a default that you have to opt out of.
 - **Naked wins LOC and perf** *for this one scenario*. It loses the second you add a second scenario, an additional event family, or any need to compose rules. The lack of structure is the whole cost.
 - **RxJS is dispatch-fast** because Subjects are sync — but the ecosystem cost is steep: 15 imported symbols means a reader has to know 15 operators to read the file.
 - **Reatom is bundle-small and complexity-high.** The atom-as-direct-call API is direct, but ends up scoring highest on cyclomatic complexity because every output is a fresh `action` declaration.
-- **Effector is graph-shaped.** Every "rule" is several `sample`s wired together; great when you can hold the graph in your head, expensive when reading cold. The throughput tax (130k ops/sec vs triggery's 270k) is the reactive-graph cost.
+- **Effector is graph-shaped.** Every "rule" is several `sample`s wired together; great when you can hold the graph in your head, expensive when reading cold. The throughput tax (177k ops/sec vs triggery's 282k fireSync) is the reactive-graph cost.
 - **RTK is the slowest and the largest** — but it's the closest to "official Redux" and the line you write today is the line every other RTK app already has.
 
 **Where Triggery makes sense over the alternatives:**

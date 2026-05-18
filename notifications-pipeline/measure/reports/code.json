@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T00:14:30.062Z",
+  "measuredAt": "2026-05-18T05:17:57.705Z",
   "rows": [
     {
       "engine": "naked",
@@ -16,17 +16,18 @@
     },
     {
       "engine": "triggery",
-      "importedSources": 1,
+      "importedSources": 2,
       "importedSymbols": 2,
       "primitives": {
         "createTrigger": 2,
-        "createRuntime": 1
+        "createRuntime": 1,
+        "action": 7
       },
-      "primitivesTotal": 3,
+      "primitivesTotal": 10,
       "cyclo": 25,
-      "nesting": 6,
+      "nesting": 5,
       "asCasts": 0,
-      "nonNull": 1
+      "nonNull": 0
     },
     {
       "engine": "reatom",
