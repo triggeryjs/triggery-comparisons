@@ -1,196 +1,260 @@
 // RxJS — single `Subject<Action>` upstream feeds a `scan` reducer. Pointer
 // moves go through a parallel branch with `throttleTime(16)` then merge back
-// in. Persist runs on `state$.pipe(debounceTime(1000))`. Drag-as-stream
-// shape is rxjs's home turf.
+// in. Persist runs on `state$.pipe(debounceTime(1000))`. Drag-as-stream shape
+// is rxjs's home turf.
 
+import { BehaviorSubject, Subject, Subscription, merge } from 'rxjs';
 import {
-  BehaviorSubject, Subject, Subscription, merge,
-} from 'rxjs';
-import {
-  debounceTime, distinctUntilChanged, filter, map, scan, share, tap, throttleTime, withLatestFrom,
+  debounceTime, distinctUntilChanged, filter, map, scan, share, tap, throttleTime,
 } from 'rxjs/operators';
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
-  clampDockSize, clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
-  defaultTitle, emptySnapshot, genId, getViewport, panelInDock, persistLayout, readPersistedLayout, snapToEdges,
+  appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
+  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
+  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
+  removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
 import type {
-  DockAnchor, FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
+  InspectorMode, ModalSpec, Panel, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
+type WS = WorkspaceSnapshot;
+
 type Action =
-  | { type: 'open-panel'; kind: PanelKind; opts?: { title?: string; body?: string }; reqId: number }
+  | { type: 'open-panel'; kind: PanelKind; opts?: { title?: string; body?: string; mode?: 'tiled' | 'floating' }; reqId: number }
   | { type: 'open-modal'; spec: ModalSpec }
   | { type: 'close'; id: string; result?: unknown }
   | { type: 'focus'; id: string }
   | { type: 'set-query'; q: string }
   | { type: 'set-body'; id: string; body: string }
-  | { type: 'dock'; id: string; anchor: DockAnchor }
-  | { type: 'undock'; id: string }
-  | { type: 'start-drag'; id: string; px: number; py: number }
-  | { type: 'start-resize'; id: string; px: number; py: number }
-  | { type: 'start-dock-resize'; anchor: DockAnchor; px: number; py: number }
-  | { type: 'pointer-move'; px: number; py: number }
+  | { type: 'set-inspector-mode'; id: string; mode: InspectorMode }
+  | { type: 'set-panel-mode'; id: string; mode: 'tiled' | 'floating' }
+  | { type: 'split-tile'; srcId: string; targetId: string; edge: 'top' | 'right' | 'bottom' | 'left' }
+  | { type: 'arrange-cascade-floating' }
+  | { type: 'arrange-mosaic-tiled' }
+  | { type: 'arrange-rows' }
+  | { type: 'arrange-columns' }
+  | { type: 'arrange-equalize' }
+  | { type: 'set-all-mode'; mode: 'tiled' | 'floating' }
+  | { type: 'start-floating-drag'; id: string; px: number; py: number }
+  | { type: 'start-tile-drag'; id: string }
+  | { type: 'start-floating-resize'; id: string; px: number; py: number }
+  | { type: 'start-divider-resize'; containerId: string; dividerIdx: number; px: number; py: number; containerLengthPx: number }
+  | { type: 'apply-move'; px: number; py: number }
+  | { type: 'set-tile-drop-target'; leafId: string | null; zone: 'top' | 'right' | 'bottom' | 'left' | 'center' | null }
   | { type: 'pointer-up' }
+  | { type: 'set-cursor'; x: number; y: number; overPanelId: string | null }
   | { type: 'reset' }
   | { type: 'load-layout' };
 
-function moveTop(z: readonly string[], id: string): string[] {
-  return [...z.filter((x) => x !== id), id];
+function moveFloatingTop(s: WS, id: string): WS {
+  return {
+    ...s,
+    floatingZOrder: [...s.floatingZOrder.filter((x) => x !== id), id],
+    focused: id,
+  };
 }
 
-function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, (id: string | null) => void>, modalResolvers: Map<string, (r: unknown) => void>): WorkspaceSnapshot {
-  switch (a.type) {
+function findByNode(t: WS['tree'], nid: string): string | null {
+  if (!t) return null;
+  if (t.kind === 'leaf') return t.id === nid ? t.panelId : null;
+  for (const c of t.children) { const r = findByNode(c, nid); if (r) return r; }
+  return null;
+}
+
+function reduce(
+  state: WS,
+  action: Action,
+  openResolvers: Map<number, (id: string | null) => void>,
+  pendingResolvers: Map<string, (r: unknown) => void>,
+): WS {
+  switch (action.type) {
     case 'open-panel': {
-      const resolver = openResolvers.get(a.reqId);
-      openResolvers.delete(a.reqId);
+      const resolver = openResolvers.get(action.reqId);
+      openResolvers.delete(action.reqId);
       if (Object.keys(state.panels).length >= MAX_PANELS) { resolver?.(null); return state; }
       const id = genId('panel');
-      const panel: FloatingPanel = {
-        id, kind: a.kind,
-        title: a.opts?.title ?? defaultTitle(a.kind),
-        body: a.opts?.body ?? defaultBody(a.kind),
-        ...defaultPanelLayout(a.kind),
+      const mode = action.opts?.mode ?? 'tiled';
+      const panel: Panel = {
+        id, kind: action.kind,
+        title: action.opts?.title ?? defaultTitle(action.kind),
+        body: action.opts?.body ?? defaultBody(action.kind),
+        mode,
+        ...defaultFloatingGeometry(action.kind),
+        ...(action.kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
       };
       resolver?.(id);
-      return { ...state, panels: { ...state.panels, [id]: panel }, zOrder: [...state.zOrder, id], focused: id };
+      const panels = { ...state.panels, [id]: panel };
+      if (mode === 'tiled') return { ...state, panels, tree: appendToTreeRight(state.tree, id), focused: id };
+      return { ...state, panels, floatingZOrder: [...state.floatingZOrder, id], focused: id };
     }
     case 'open-modal':
-      return { ...state, modals: [...state.modals, a.spec] };
+      return { ...state, modals: [...state.modals, action.spec] };
     case 'close': {
-      if (state.modals.some((m) => m.id === a.id)) {
-        const resolver = modalResolvers.get(a.id);
-        modalResolvers.delete(a.id);
-        resolver?.(a.result);
-        return { ...state, modals: state.modals.filter((m) => m.id !== a.id) };
+      if (state.modals.some((m) => m.id === action.id)) {
+        const r = pendingResolvers.get(action.id); pendingResolvers.delete(action.id);
+        const next = { ...state, modals: state.modals.filter((m) => m.id !== action.id) };
+        r?.(action.result);
+        return next;
       }
-      if (state.panels[a.id]) {
-        const { [a.id]: _drop, ...rest } = state.panels;
-        void _drop;
-        const zOrder = state.zOrder.filter((x) => x !== a.id);
-        return {
-          ...state, panels: rest, zOrder,
-          focused: state.focused === a.id ? (zOrder[zOrder.length - 1] ?? null) : state.focused,
-        };
-      }
-      return state;
+      if (!state.panels[action.id]) return state;
+      const { [action.id]: _drop, ...rest } = state.panels; void _drop;
+      const tree = removeFromTree(state.tree, action.id);
+      const floatingZOrder = state.floatingZOrder.filter((x) => x !== action.id);
+      const focused = state.focused === action.id ? (floatingZOrder[floatingZOrder.length - 1] ?? null) : state.focused;
+      return { ...state, panels: rest, tree, floatingZOrder, focused };
     }
     case 'focus': {
-      const panel = state.panels[a.id];
-      if (!panel) return state;
-      if (panel.dock !== null) return { ...state, focused: a.id };
-      return { ...state, zOrder: moveTop(state.zOrder, a.id), focused: a.id };
+      const p = state.panels[action.id]; if (!p) return state;
+      return p.mode === 'floating' ? moveFloatingTop(state, action.id) : { ...state, focused: action.id };
     }
-    case 'dock': {
-      const panel = state.panels[a.id];
-      if (!panel) return state;
-      const existing = panelInDock(state.panels, a.anchor);
-      let panels = state.panels;
-      let zOrder = state.zOrder;
-      if (existing && existing.id !== a.id) {
-        const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
-        panels = { ...panels, [restored.id]: restored };
-        if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
-      }
-      panels = { ...panels, [a.id]: { ...panel, dock: a.anchor } };
-      zOrder = zOrder.filter((x) => x !== a.id);
-      return { ...state, panels, zOrder, focused: a.id };
-    }
-    case 'undock': {
-      const panel = state.panels[a.id];
-      if (!panel || panel.dock === null) return state;
-      const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
-      return {
-        ...state,
-        panels: { ...state.panels, [a.id]: floating },
-        zOrder: state.zOrder.includes(a.id) ? state.zOrder : [...state.zOrder, a.id],
-        focused: a.id,
-      };
-    }
-    case 'start-dock-resize':
-      return {
-        ...state,
-        interaction: {
-          kind: 'dock-resize', anchor: a.anchor,
-          startSize: state.dockSizes[a.anchor],
-          startPointer: a.anchor === 'bottom' ? a.py : a.px,
-        },
-      };
     case 'set-query': {
       const top = state.modals[state.modals.length - 1];
       if (top?.kind !== 'command-palette') return state;
-      return { ...state, modals: [...state.modals.slice(0, -1), { ...top, query: a.q }] };
+      return { ...state, modals: [...state.modals.slice(0, -1), { ...top, query: action.q }] };
     }
     case 'set-body': {
-      const panel = state.panels[a.id];
-      if (!panel) return state;
-      return { ...state, panels: { ...state.panels, [a.id]: { ...panel, body: a.body } } };
+      const p = state.panels[action.id]; if (!p) return state;
+      return { ...state, panels: { ...state.panels, [action.id]: { ...p, body: action.body } } };
     }
-    case 'start-drag': {
-      const panel = state.panels[a.id];
-      if (!panel || panel.dock !== null) return state;
+    case 'set-inspector-mode': {
+      const p = state.panels[action.id]; if (!p || p.kind !== 'inspector') return state;
+      return { ...state, panels: { ...state.panels, [action.id]: { ...p, inspectorMode: action.mode } } };
+    }
+    case 'set-panel-mode': {
+      const p = state.panels[action.id]; if (!p || p.mode === action.mode) return state;
+      if (action.mode === 'floating') {
+        const updated: Panel = { ...p, mode: 'floating', x: p.x || 120, y: p.y || 120, w: p.w || 360, h: p.h || 240 };
+        return {
+          ...state,
+          panels: { ...state.panels, [action.id]: updated },
+          tree: removeFromTree(state.tree, action.id),
+          floatingZOrder: [...state.floatingZOrder, action.id],
+          focused: action.id,
+        };
+      }
       return {
         ...state,
-        zOrder: moveTop(state.zOrder, a.id),
-        focused: a.id,
-        interaction: { kind: 'drag', id: a.id, offset: { x: a.px - panel.x, y: a.py - panel.y } },
+        panels: { ...state.panels, [action.id]: { ...p, mode: 'tiled' } },
+        tree: appendToTreeRight(state.tree, action.id),
+        floatingZOrder: state.floatingZOrder.filter((x) => x !== action.id),
+        focused: action.id,
       };
     }
-    case 'start-resize': {
-      const panel = state.panels[a.id];
-      if (!panel || panel.dock !== null) return state;
+    case 'split-tile': {
+      const src = state.panels[action.srcId]; if (!src) return state;
+      if (!findLeaf(state.tree, action.targetId) || action.srcId === action.targetId) return state;
+      let tree = src.mode === 'tiled' ? removeFromTree(state.tree, action.srcId) : state.tree;
+      let floatingZOrder = state.floatingZOrder;
+      if (src.mode === 'floating') floatingZOrder = floatingZOrder.filter((x) => x !== action.srcId);
+      if (!tree) tree = removeFromTree(state.tree, action.srcId);
+      tree = splitAt(tree!, action.targetId, action.edge, action.srcId);
       return {
         ...state,
-        zOrder: moveTop(state.zOrder, a.id),
-        focused: a.id,
+        panels: { ...state.panels, [action.srcId]: { ...src, mode: 'tiled' } },
+        tree, floatingZOrder, focused: action.srcId, interaction: null,
+      };
+    }
+    case 'arrange-cascade-floating': {
+      const fpanels = state.floatingZOrder.map((id) => state.panels[id]).filter((x): x is Panel => !!x);
+      if (fpanels.length === 0) return state;
+      const next = cascadeFloating(fpanels, getViewport());
+      const panels = { ...state.panels };
+      for (const p of next) panels[p.id] = p;
+      return { ...state, panels };
+    }
+    case 'arrange-mosaic-tiled':
+      return { ...state, tree: buildMosaic(flattenPanelIds(state.tree)) };
+    case 'arrange-rows':
+      return { ...state, tree: buildRow(flattenPanelIds(state.tree)) };
+    case 'arrange-columns':
+      return { ...state, tree: buildColumn(flattenPanelIds(state.tree)) };
+    case 'arrange-equalize':
+      return { ...state, tree: equalizeTree(state.tree) };
+    case 'set-all-mode': {
+      const allIds = Object.keys(state.panels);
+      const panels = { ...state.panels };
+      for (const id of allIds) panels[id] = { ...panels[id]!, mode: action.mode };
+      if (action.mode === 'floating') return { ...state, panels, tree: null, floatingZOrder: allIds };
+      return { ...state, panels, tree: buildMosaic(allIds), floatingZOrder: [] };
+    }
+    case 'start-floating-drag': {
+      const p = state.panels[action.id]; if (!p || p.mode !== 'floating') return state;
+      const moved = moveFloatingTop(state, action.id);
+      return { ...moved, interaction: { kind: 'drag-floating', id: action.id, offset: { x: action.px - p.x, y: action.py - p.y } } };
+    }
+    case 'start-tile-drag': {
+      const p = state.panels[action.id]; if (!p || p.mode !== 'tiled') return state;
+      return { ...state, interaction: { kind: 'drag-tiled', id: action.id, targetLeafId: null, targetZone: null } };
+    }
+    case 'start-floating-resize': {
+      const p = state.panels[action.id]; if (!p || p.mode !== 'floating') return state;
+      const moved = moveFloatingTop(state, action.id);
+      return { ...moved, interaction: { kind: 'resize-floating', id: action.id, startSize: { w: p.w, h: p.h }, startPointer: { x: action.px, y: action.py } } };
+    }
+    case 'start-divider-resize': {
+      const c = findContainer(state.tree, action.containerId); if (!c) return state;
+      return {
+        ...state,
         interaction: {
-          kind: 'resize', id: a.id,
-          startSize: { w: panel.w, h: panel.h },
-          startPointer: { x: a.px, y: a.py },
+          kind: 'divider-resize', containerId: action.containerId, dividerIdx: action.dividerIdx,
+          startSizes: [...c.sizes], startPointer: c.dir === 'row' ? action.px : action.py,
+          containerLength: action.containerLengthPx,
         },
       };
     }
-    case 'pointer-move': {
-      const inter = state.interaction;
-      if (!inter) return state;
+    case 'apply-move': {
+      const inter = state.interaction; if (!inter) return state;
       const viewport = getViewport();
-      if (inter.kind === 'dock-resize') {
-        const cur = inter.anchor === 'bottom' ? a.py : a.px;
-        let delta = cur - inter.startPointer;
-        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
-        const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
-        return { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
-      }
-      const panel = state.panels[inter.id];
-      if (!panel) return state;
-      if (inter.kind === 'drag') {
-        const moved = { ...panel, x: a.px - inter.offset.x, y: a.py - inter.offset.y };
-        const snapped = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
+      if (inter.kind === 'drag-floating') {
+        const p = state.panels[inter.id]; if (!p) return state;
+        const moved = { ...p, x: action.px - inter.offset.x, y: action.py - inter.offset.y };
+        const clamped = clampPanelToViewport(moved, viewport);
+        const others = Object.values(state.panels).filter((x) => x.id !== inter.id && x.mode === 'floating');
+        const snapped = snapFloating(clamped, viewport, others);
         return { ...state, panels: { ...state.panels, [inter.id]: snapped } };
       }
-      const dx = a.px - inter.startPointer.x;
-      const dy = a.py - inter.startPointer.y;
-      const sized = clampResize(
-        inter.startSize.w + dx, inter.startSize.h + dy,
-        { x: panel.x, y: panel.y }, viewport,
-      );
-      return { ...state, panels: { ...state.panels, [inter.id]: { ...panel, ...sized } } };
+      if (inter.kind === 'resize-floating') {
+        const p = state.panels[inter.id]; if (!p) return state;
+        const dx = action.px - inter.startPointer.x;
+        const dy = action.py - inter.startPointer.y;
+        const sized = clampResize(inter.startSize.w + dx, inter.startSize.h + dy, { x: p.x, y: p.y }, viewport);
+        return { ...state, panels: { ...state.panels, [inter.id]: { ...p, ...sized } } };
+      }
+      if (inter.kind === 'divider-resize') {
+        const c = findContainer(state.tree, inter.containerId); if (!c) return state;
+        const delta = (c.dir === 'row' ? action.px : action.py) - inter.startPointer;
+        const next = resizeContainerDivider(inter.startSizes, inter.dividerIdx, delta, inter.containerLength);
+        return { ...state, tree: setContainerSizes(state.tree!, inter.containerId, next) };
+      }
+      return state;
+    }
+    case 'set-tile-drop-target': {
+      const inter = state.interaction;
+      if (inter?.kind !== 'drag-tiled') return state;
+      if (inter.targetLeafId === action.leafId && inter.targetZone === action.zone) return state;
+      return { ...state, interaction: { ...inter, targetLeafId: action.leafId, targetZone: action.zone } };
     }
     case 'pointer-up':
       return { ...state, interaction: null };
+    case 'set-cursor': {
+      if (state.cursor.x === action.x && state.cursor.y === action.y && state.cursor.overPanelId === action.overPanelId) return state;
+      return { ...state, cursor: { x: action.x, y: action.y, overPanelId: action.overPanelId } };
+    }
     case 'reset':
       return emptySnapshot();
     case 'load-layout': {
       const layout = readPersistedLayout();
       if (!layout) return state;
-      const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
+      const validIds = new Set(Object.keys(layout.panels));
       return {
         ...emptySnapshot(),
         panels: layout.panels,
-        zOrder: surviving,
-        dockSizes: layout.dockSizes ?? emptySnapshot().dockSizes,
-        focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
+        tree: layout.tree,
+        floatingZOrder: layout.floatingZOrder.filter((id) => validIds.has(id)),
+        focused: validIds.has(layout.focused ?? '') ? layout.focused : null,
       };
     }
   }
@@ -200,133 +264,147 @@ export const rxjsFactory: EngineFactory = {
   meta: {
     id: 'rxjs',
     label: 'RxJS',
-    description: 'Subject<Action> + scan reducer; throttleTime for drag, debounceTime for persist.',
+    description: 'Subject + scan reducer; throttleTime(16) for pointer-move; debounceTime(1000) for persist.',
     sourcePath: 'floating-workspace/src/engines/rxjs.ts',
   },
   create(): Engine {
-    const actions$ = new Subject<Action>();
-    const modalResolvers = new Map<string, (r: unknown) => void>();
+    const pendingResolvers = new Map<string, (r: unknown) => void>();
     const openResolvers = new Map<number, (id: string | null) => void>();
     let openReqIdCounter = 0;
-    let handledKey = false;
 
-    // Pointer moves are throttled to 16ms; all other actions flow through immediately.
-    const moves$ = actions$.pipe(
-      filter((a): a is Extract<Action, { type: 'pointer-move' }> => a.type === 'pointer-move'),
-      throttleTime(POINTER_THROTTLE_MS, undefined, { leading: true, trailing: true }),
-    );
-    const others$ = actions$.pipe(filter((a) => a.type !== 'pointer-move'));
-    const merged$ = merge(others$, moves$);
+    const action$ = new Subject<Action>();
+    const move$ = new Subject<{ px: number; py: number }>();
+    const state$ = new BehaviorSubject<WS>(emptySnapshot());
+    const subs = new Set<(s: WS) => void>();
 
-    const state$ = merged$.pipe(
-      scan((s: WorkspaceSnapshot, a) => reduce(s, a, openResolvers, modalResolvers), emptySnapshot()),
-      share({ resetOnRefCountZero: false }),
-    );
-
-    const snapshot$ = new BehaviorSubject<WorkspaceSnapshot>(emptySnapshot());
     const subscription = new Subscription();
-    subscription.add(state$.pipe(distinctUntilChanged()).subscribe((s) => snapshot$.next(s)));
 
-    // Persist on every change, debounced
+    // Throttled pointer-move stream → apply-move action
+    const throttledMove$ = move$.pipe(
+      throttleTime(POINTER_THROTTLE_MS, undefined, { leading: true, trailing: true }),
+      map<{ px: number; py: number }, Action>(({ px, py }) => ({ type: 'apply-move', px, py })),
+    );
+
+    // Merged action stream → scan reducer → BehaviorSubject
     subscription.add(
-      snapshot$.pipe(
-        // Skip initial empty snapshot
-        filter((s) => Object.keys(s.panels).length > 0 || s.modals.length > 0),
+      merge(action$, throttledMove$).pipe(
+        scan<Action, WS>((acc, a) => reduce(acc, a, openResolvers, pendingResolvers), emptySnapshot()),
+        share(),
+      ).subscribe((s) => state$.next(s)),
+    );
+
+    // Fan-out to UI subscribers
+    subscription.add(state$.subscribe((s) => { for (const cb of subs) cb(s); }));
+
+    // Persist on debounced state change
+    subscription.add(
+      state$.pipe(
         debounceTime(PERSIST_DEBOUNCE_MS),
-        tap((s) => persistLayout(s)),
-      ).subscribe(),
+        distinctUntilChanged(),
+      ).subscribe((s) => persistLayout(s)),
     );
 
-    // Reset clears storage
+    // Clear persistence on reset
     subscription.add(
-      actions$.pipe(filter((a) => a.type === 'reset'), tap(() => clearPersistedLayout())).subscribe(),
+      action$.pipe(filter((a) => a.type === 'reset'), tap(() => clearPersistedLayout())).subscribe(),
     );
-
-    // Flush persist on pointer-up so drag-end is durable.
-    subscription.add(
-      actions$.pipe(
-        filter((a) => a.type === 'pointer-up'),
-        withLatestFrom(snapshot$),
-        map(([, s]) => s),
-        tap((s) => persistLayout(s)),
-      ).subscribe(),
-    );
-
-    const subs = new Set<(s: WorkspaceSnapshot) => void>();
-    subscription.add(snapshot$.subscribe((s) => { for (const cb of subs) cb(s); }));
 
     return {
-      snapshot: () => snapshot$.getValue(),
+      snapshot: () => state$.value,
       subscribe(cb) { subs.add(cb); return (() => subs.delete(cb)) as Unsubscribe; },
-
       openPanel(kind, opts) {
         const reqId = ++openReqIdCounter;
         let id: string | null = null;
         openResolvers.set(reqId, (x) => { id = x; });
-        actions$.next({ type: 'open-panel', kind, opts, reqId });
+        action$.next({ type: 'open-panel', kind, opts, reqId });
         return id;
       },
       alert(title, body) {
         return new Promise<void>((resolve) => {
           const id = genId('modal');
-          modalResolvers.set(id, () => resolve());
-          actions$.next({ type: 'open-modal', spec: { kind: 'alert', id, title, body } });
+          pendingResolvers.set(id, () => resolve());
+          action$.next({ type: 'open-modal', spec: { kind: 'alert', id, title, body } });
         });
       },
       confirm(title, body) {
         return new Promise<boolean>((resolve) => {
           const id = genId('modal');
-          modalResolvers.set(id, (r) => resolve(Boolean(r)));
-          actions$.next({ type: 'open-modal', spec: { kind: 'confirm', id, title, body } });
+          pendingResolvers.set(id, (r) => resolve(Boolean(r)));
+          action$.next({ type: 'open-modal', spec: { kind: 'confirm', id, title, body } });
         });
       },
       openCommandPalette(commands) {
         return new Promise<string | null>((resolve) => {
           const id = genId('modal');
-          modalResolvers.set(id, (r) => resolve(typeof r === 'string' ? r : null));
-          actions$.next({ type: 'open-modal', spec: { kind: 'command-palette', id, query: '', commands } });
+          pendingResolvers.set(id, (r) => resolve(typeof r === 'string' ? r : null));
+          action$.next({ type: 'open-modal', spec: { kind: 'command-palette', id, query: '', commands } });
         });
       },
-      close: (id, result) => actions$.next({ type: 'close', id, result }),
-      focus: (id) => actions$.next({ type: 'focus', id }),
-      setQuery: (q) => actions$.next({ type: 'set-query', q }),
-      setBody: (id, body) => actions$.next({ type: 'set-body', id, body }),
-      dock: (id, anchor) => actions$.next({ type: 'dock', id, anchor }),
-      undock: (id) => actions$.next({ type: 'undock', id }),
-      startDrag: (id, px, py) => actions$.next({ type: 'start-drag', id, px, py }),
-      startResize: (id, px, py) => actions$.next({ type: 'start-resize', id, px, py }),
-      startDockResize: (anchor, px, py) => actions$.next({ type: 'start-dock-resize', anchor, px, py }),
-      pointerMove: (px, py) => actions$.next({ type: 'pointer-move', px, py }),
-      pointerUp: () => actions$.next({ type: 'pointer-up' }),
-      onKey({ key, meta, ctrl }) {
-        handledKey = false;
-        const mod = meta || ctrl;
-        const s = snapshot$.getValue();
-        if (mod && (key === 'k' || key === 'K')) {
-          actions$.next({ type: 'open-modal', spec: { kind: 'command-palette', id: genId('modal'), query: '', commands: COMMAND_PALETTE_COMMANDS } });
-          handledKey = true;
-        } else if (key === 'Escape') {
-          const top = s.modals[s.modals.length - 1];
-          if (top) {
-            actions$.next({ type: 'close', id: top.id, result: top.kind === 'confirm' ? false : top.kind === 'command-palette' ? null : undefined });
-            handledKey = true;
-          } else if (s.focused) {
-            actions$.next({ type: 'close', id: s.focused });
-            handledKey = true;
+      close: (id, result) => action$.next({ type: 'close', id, result }),
+      focus: (id) => action$.next({ type: 'focus', id }),
+      setBody: (id, body) => action$.next({ type: 'set-body', id, body }),
+      setInspectorMode: (id, mode) => action$.next({ type: 'set-inspector-mode', id, mode }),
+      setQuery: (q) => action$.next({ type: 'set-query', q }),
+      setPanelMode: (id, mode) => action$.next({ type: 'set-panel-mode', id, mode }),
+      splitTile: (srcId, targetId, edge) => action$.next({ type: 'split-tile', srcId, targetId, edge }),
+      arrangeCascadeFloating: () => action$.next({ type: 'arrange-cascade-floating' }),
+      arrangeMosaicTiled: () => action$.next({ type: 'arrange-mosaic-tiled' }),
+      arrangeRows: () => action$.next({ type: 'arrange-rows' }),
+      arrangeColumns: () => action$.next({ type: 'arrange-columns' }),
+      arrangeEqualizeTiles: () => action$.next({ type: 'arrange-equalize' }),
+      setAllPanelsMode: (mode) => action$.next({ type: 'set-all-mode', mode }),
+      startFloatingDrag: (id, px, py) => action$.next({ type: 'start-floating-drag', id, px, py }),
+      startTileDrag: (id) => action$.next({ type: 'start-tile-drag', id }),
+      startFloatingResize: (id, px, py) => action$.next({ type: 'start-floating-resize', id, px, py }),
+      startDividerResize: (containerId, dividerIdx, px, py, containerLengthPx) =>
+        action$.next({ type: 'start-divider-resize', containerId, dividerIdx, px, py, containerLengthPx }),
+      pointerMove(px, py) {
+        if (!state$.value.interaction) return;
+        move$.next({ px, py });
+      },
+      setTileDropTarget: (leafId, zone) => action$.next({ type: 'set-tile-drop-target', leafId, zone }),
+      pointerUp() {
+        const s = state$.value;
+        const inter = s.interaction;
+        if (!inter) return;
+        if (inter.kind === 'drag-tiled' && inter.targetLeafId && inter.targetZone) {
+          const targetPanelId = findByNode(s.tree, inter.targetLeafId);
+          if (targetPanelId && targetPanelId !== inter.id) {
+            const edge = inter.targetZone === 'center' ? 'right' : inter.targetZone;
+            action$.next({ type: 'split-tile', srcId: inter.id, targetId: targetPanelId, edge });
+            return;
           }
-        } else if (mod && (key === 'w' || key === 'W') && s.modals.length === 0 && s.focused) {
-          actions$.next({ type: 'close', id: s.focused });
-          handledKey = true;
         }
-        return handledKey;
+        action$.next({ type: 'pointer-up' });
       },
-      loadLayout: () => actions$.next({ type: 'load-layout' }),
-      reset: () => {
-        for (const [, r] of modalResolvers) r(undefined);
-        modalResolvers.clear();
-        actions$.next({ type: 'reset' });
+      setCursor: (x, y, overPanelId) => action$.next({ type: 'set-cursor', x, y, overPanelId }),
+      onKey({ key, meta, ctrl }) {
+        const mod = meta || ctrl;
+        const s = state$.value;
+        if (mod && (key === 'k' || key === 'K')) { this.openCommandPalette(COMMAND_PALETTE_COMMANDS); return true; }
+        if (key === 'Escape') {
+          const top = s.modals[s.modals.length - 1];
+          if (top) { this.close(top.id, top.kind === 'confirm' ? false : top.kind === 'command-palette' ? null : undefined); return true; }
+          if (s.focused) { this.close(s.focused); return true; }
+          return false;
+        }
+        if (mod && (key === 'w' || key === 'W') && s.modals.length === 0 && s.focused) { this.close(s.focused); return true; }
+        return false;
       },
-      dispose: () => { subscription.unsubscribe(); subs.clear(); modalResolvers.clear(); },
+      loadLayout: () => action$.next({ type: 'load-layout' }),
+      reset() {
+        for (const [, r] of pendingResolvers) r(undefined);
+        pendingResolvers.clear();
+        action$.next({ type: 'reset' });
+      },
+      dispose() {
+        subscription.unsubscribe();
+        action$.complete();
+        move$.complete();
+        state$.complete();
+        subs.clear();
+        pendingResolvers.clear();
+      },
     };
   },
 };

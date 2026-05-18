@@ -3,25 +3,48 @@
 
 export type PanelKind = 'note' | 'inspector';
 
-/** Where a panel is docked. `null` = floating. */
-export type DockAnchor = 'left' | 'right' | 'bottom';
+/** Whether a panel lives inside the tile tree or as a free-form floating window. */
+export type PanelMode = 'tiled' | 'floating';
 
-export interface FloatingPanel {
+/** Inspector view mode — what its body shows. UI reads live `snap.*` to render. */
+export type InspectorMode = 'static' | 'state' | 'cursor' | 'tree';
+
+export interface Panel {
   id: string;
   kind: PanelKind;
   title: string;
-  /** When `dock === null`, x/y are coords in the main area; w/h are size.
-   *  When docked, x/y are ignored, and only `w` matters for left/right
-   *  docks (their width) while `h` matters for bottom dock (its height).
-   *  The other dimension is `auto` (full main area). */
-  dock: DockAnchor | null;
+  /** Plain text for notes; JSON-mock for `inspectorMode === 'static'`; ignored
+   *  for other inspector modes (UI computes content from live snap). */
+  body: string;
+  mode: PanelMode;
+  /** Floating geometry — meaningful only when `mode === 'floating'`. */
   x: number;
   y: number;
   w: number;
   h: number;
-  /** Free-form panel data — `string` (note body) for notes,
-   *  JSON-shaped data for inspectors. */
-  body: string;
+  /** Inspector-only — UI's content renderer mode. Defaults to 'static'. */
+  inspectorMode?: InspectorMode;
+}
+
+/** Tree-based tiling: every internal node is a row/col split with N children;
+ *  every leaf is one panel id. The tree's geometry fills the main area. */
+export type TileNode = TileContainer | TileLeaf;
+export interface TileContainer {
+  kind: 'container';
+  id: string;
+  /** `row` = horizontal split (children side-by-side, left → right).
+   *  `col` = vertical split (children top → bottom). */
+  dir: 'row' | 'col';
+  /** Tree children. */
+  children: TileNode[];
+  /** Flex weights — percentage of parent dimension. `sizes.length === children.length`,
+   *  sum should be ≈ 100. */
+  sizes: number[];
+}
+export interface TileLeaf {
+  kind: 'leaf';
+  id: string;
+  panelId: string;
 }
 
 export type ModalSpec =
@@ -31,61 +54,62 @@ export type ModalSpec =
       kind: 'command-palette';
       id: string;
       query: string;
-      // Mutable type (no `readonly`) so RTK/immer can hold this in slice state
-      // without complaining. The contract is still "treat as read-only at use".
       commands: { id: string; label: string; hint?: string }[];
     };
-
-export type ModalResult =
-  | { kind: 'alert'; result: void }
-  | { kind: 'confirm'; result: boolean }
-  | { kind: 'command-palette'; result: string | null };
 
 /** Pointer interaction in flight: `null` when idle. */
 export type Interaction =
   | null
   | {
-      kind: 'drag';
+      kind: 'drag-floating';
       id: string;
-      /** Offset from the panel's top-left to where the pointer grabbed it. */
       offset: { x: number; y: number };
     }
   | {
-      kind: 'resize';
+      kind: 'resize-floating';
       id: string;
-      /** Size at the moment resize started. */
       startSize: { w: number; h: number };
-      /** Pointer coords at the moment resize started. */
       startPointer: { x: number; y: number };
     }
   | {
-      kind: 'dock-resize';
-      anchor: DockAnchor;
-      /** Dock dimension (width for left/right, height for bottom) at start. */
-      startSize: number;
-      /** Pointer coord at start (x for left/right, y for bottom). */
+      kind: 'drag-tiled';
+      /** Panel being dragged out of its tile (preview for drag-to-split). */
+      id: string;
+      /** Target leaf id under pointer, if any (UI shows 5-zone overlay there). */
+      targetLeafId: string | null;
+      /** Which zone of the target leaf the pointer is in. */
+      targetZone: 'top' | 'right' | 'bottom' | 'left' | 'center' | null;
+    }
+  | {
+      kind: 'divider-resize';
+      /** Container id whose divider is being dragged. */
+      containerId: string;
+      /** Index in `sizes` of the LEFT/TOP-side child of this divider. */
+      dividerIdx: number;
+      /** Starting sizes before drag. */
+      startSizes: number[];
+      /** Pointer coord at start (x for row dir, y for col dir). */
       startPointer: number;
+      /** Container's total length along the split axis (in px), captured at drag start. */
+      containerLength: number;
     };
 
 /** Public snapshot the UI subscribes to. */
 export interface WorkspaceSnapshot {
-  /** All open panels (both floating and docked), keyed by id. The `dock`
-   *  field on each `FloatingPanel` distinguishes — `null` = floating,
-   *  otherwise the anchor side. */
-  panels: Record<string, FloatingPanel>;
-  /** *Floating* panel ids in bottom-to-top z-order. Docked panels are
-   *  never in zOrder (they have their own slot). The last one is on top. */
-  zOrder: readonly string[];
-  /** Modal stack — last element is the active modal. Modals always render
-   *  above everything. */
+  /** All open panels (both tiled and floating), keyed by id. Mode field discriminates. */
+  panels: Record<string, Panel>;
+  /** Tile tree — null when no tiled panels exist. */
+  tree: TileNode | null;
+  /** Floating panel ids in bottom-to-top z-order. */
+  floatingZOrder: readonly string[];
+  /** Modal stack — last is the active modal, always rendered above everything. */
   modals: readonly ModalSpec[];
-  /** Currently focused panel id (floating or docked). Drives ⌘W + ESC fallback. */
+  /** Currently focused panel id (tiled or floating). */
   focused: string | null;
-  /** In-flight pointer interaction (drag / resize / dock-resize). */
+  /** In-flight pointer interaction. */
   interaction: Interaction;
-  /** Current dock-slot sizes — width for left/right, height for bottom.
-   *  Only meaningful when the corresponding dock has a panel in it. */
-  dockSizes: { left: number; right: number; bottom: number };
+  /** Live cursor tracking — used by inspector's 'cursor' mode. */
+  cursor: { x: number; y: number; overPanelId: string | null };
 }
 
 export type Unsubscribe = () => void;

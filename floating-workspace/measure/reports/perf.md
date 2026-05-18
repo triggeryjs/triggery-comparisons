@@ -1,11 +1,11 @@
 | engine                 | drag events/sec | snapshots/1000 | setBody p50 | p95 | p99 |
 |------------------------|---:|---:|---:|---:|---:|
-| Redux + thunk          |   7813k ev/sec |       3 |   4.5 µs |   5.7 µs |    16 µs |
-| Reatom                 |   4296k ev/sec |       3 |   2.5 µs |   3.9 µs |   9.4 µs |
-| Effector               |   3502k ev/sec |       3 |   4.6 µs |   9.1 µs |    16 µs |
-| Naked baseline         |   2814k ev/sec |       3 |  0.67 µs |  0.75 µs |   2.2 µs |
-| RxJS                   |   1815k ev/sec |       3 |   1.1 µs |   1.9 µs |   5.4 µs |
-| Triggery               |    231k ev/sec |       3 |   2.5 µs |   4.6 µs |    12 µs |
-| Redux + saga           |    217k ev/sec |       3 |   4.4 µs |    26 µs |    46 µs |
-| XState                 |     87k ev/sec |    1002 |   4.7 µs |    19 µs |    57 µs |
-| RTK listenerMiddleware |     75k ev/sec |       2 |   6.7 µs |    10 µs |    31 µs |
+| Naked baseline         |   7797k ev/sec |       3 |  0.67 µs |  0.75 µs |   1.9 µs |
+| Redux + thunk          |   4938k ev/sec |       3 |   4.2 µs |   6.8 µs |    25 µs |
+| Reatom                 |   4766k ev/sec |       3 |   2.4 µs |   3.2 µs |    11 µs |
+| Effector               |   4349k ev/sec |       3 |   3.6 µs |    16 µs |    39 µs |
+| RxJS                   |   2300k ev/sec |       3 |  0.96 µs |   1.1 µs |   4.6 µs |
+| Redux + saga           |    345k ev/sec |    1007 |   3.5 µs |    16 µs |    67 µs |
+| Triggery               |    269k ev/sec |       3 |   2.7 µs |   4.5 µs |    27 µs |
+| XState                 |     84k ev/sec |    1002 |   4.5 µs |   6.8 µs |    25 µs |
+| RTK listenerMiddleware |     25k ev/sec |    1004 |   7.6 µs |    14 µs |    47 µs |

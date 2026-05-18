@@ -1,420 +1,363 @@
-// Triggery — four triggers, one per concern, dispatched through lookup tables:
-//   `lifecycle`  — open/close/focus, setQuery, setBody, modal resolvers
-//   `pointer`    — drag/resize state machine; `actions.throttle(16)` for moves
-//   `keyboard`   — ESC / ⌘W / ⌘K key routing
-//   `persist`    — `actions.debounce(1000)` writes layout to localStorage
-// State is a closure (a workspace is a record of windows + pointers, not a graph).
-// Each trigger emits a `snapshot` action; subscribers fan out to the UI.
+// Triggery — single `workspace` trigger dispatches a tagged action via a
+// lookup table (built once per instance, not per event). Tree manipulation,
+// arrange algorithms, snap and clamp logic — all imported from scenario.ts;
+// the engine is the orchestration layer. `actions.throttle(16).move` does
+// the pointer-move debounce in one declarative line. State is a closure
+// (a tree is a tree, not a graph of stores).
 
 import { createRuntime, createTrigger } from '@triggery/core';
 import type { Engine, EngineFactory } from '../engine';
 import {
-  COMMAND_PALETTE_COMMANDS,
-  MAX_PANELS,
-  PERSIST_DEBOUNCE_MS,
-  POINTER_THROTTLE_MS,
-  clampDockSize,
-  clampPanelToViewport,
-  clampResize,
-  clearPersistedLayout,
-  defaultBody,
-  defaultPanelLayout,
-  defaultTitle,
-  emptySnapshot,
-  genId,
-  getViewport,
-  panelInDock,
-  persistLayout,
-  readPersistedLayout,
-  snapToEdges,
+  COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
+  appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
+  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
+  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
+  removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
 import type {
-  DockAnchor,
-  FloatingPanel,
-  ModalSpec,
-  PanelKind,
-  Unsubscribe,
-  WorkspaceSnapshot,
+  InspectorMode, ModalSpec, Panel, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
-type LifecycleSchema = {
-  events: {
-    'open-panel': { kind: PanelKind; title?: string; body?: string; reqId: number };
-    'open-modal': { spec: ModalSpec };
-    'close': { id: string; result?: unknown };
-    'focus': { id: string };
-    'set-query': { q: string };
-    'set-body': { id: string; body: string };
-    'dock': { id: string; anchor: DockAnchor };
-    'undock': { id: string };
-    'reset': void;
-    'load-layout': void;
-  };
-  actions: { snapshot: WorkspaceSnapshot };
-};
-type PointerSchema = {
-  events: {
-    'start-drag': { id: string; px: number; py: number };
-    'start-resize': { id: string; px: number; py: number };
-    'start-dock-resize': { anchor: DockAnchor; px: number; py: number };
-    'pointer-move': { px: number; py: number };
-    'pointer-up': void;
-  };
-  actions: {
-    /** Throttled move emit — the actual pixel update goes through this. */
-    'apply-move': { px: number; py: number };
-    snapshot: WorkspaceSnapshot;
-  };
-};
-type KeyboardSchema = {
-  events: { 'key': { key: string; meta: boolean; ctrl: boolean } };
-  actions: { snapshot: WorkspaceSnapshot };
-};
-type PersistSchema = {
-  events: { 'changed': void; 'flush': void };
-  actions: { 'write': WorkspaceSnapshot };
-};
+type WS = WorkspaceSnapshot;
 
 export const triggeryFactory: EngineFactory = {
   meta: {
     id: 'triggery',
     label: 'Triggery',
-    description: 'Four triggers (lifecycle/pointer/keyboard/persist); throttle + debounce built in.',
+    description: 'Single trigger + dispatch table; actions.throttle(16) + actions.debounce(1000).',
     sourcePath: 'floating-workspace/src/engines/triggery.ts',
   },
   create(): Engine {
     const runtime = createRuntime({ inspector: false });
-    let state: WorkspaceSnapshot = emptySnapshot();
-    const subs = new Set<(s: WorkspaceSnapshot) => void>();
+    let state: WS = emptySnapshot();
+    const subs = new Set<(s: WS) => void>();
     const pendingResolvers = new Map<string, (r: unknown) => void>();
-    let openReqId = 0;
-    const openReqResolvers = new Map<number, (id: string | null) => void>();
 
     const emit = () => { for (const cb of subs) cb(state); };
+    const set = (next: WS) => { state = next; emit(); };
+    const patch = (p: Partial<WS>) => set({ ...state, ...p });
 
-    const moveTop = (id: string) => {
-      const rest = state.zOrder.filter((x) => x !== id);
-      state = { ...state, zOrder: [...rest, id], focused: id };
-    };
-    const setPanel = (panel: FloatingPanel) => {
-      state = { ...state, panels: { ...state.panels, [panel.id]: panel } };
+    type Schema = {
+      events: {
+        mutate: { fn: (s: WS) => WS };
+        'pointer-move': { px: number; py: number };
+      };
+      actions: {
+        'apply-move': { px: number; py: number };
+        persist: WS;
+        snapshot: WS;
+      };
     };
 
-    // biome-ignore lint/suspicious/noExplicitAny: dispatch tables keyed by discriminated union
-    type Fn = (p: any) => void;
-
-    const lifecycleTable: Record<string, Fn> = {
-      'open-panel': (p: { kind: PanelKind; title?: string; body?: string; reqId: number }) => {
-        const resolver = openReqResolvers.get(p.reqId);
-        openReqResolvers.delete(p.reqId);
-        if (Object.keys(state.panels).length >= MAX_PANELS) {
-          resolver?.(null);
-          return;
-        }
-        const id = genId('panel');
-        const panel: FloatingPanel = {
-          id, kind: p.kind,
-          title: p.title ?? defaultTitle(p.kind),
-          body: p.body ?? defaultBody(p.kind),
-          ...defaultPanelLayout(p.kind),
-        };
-        setPanel(panel);
-        state = { ...state, zOrder: [...state.zOrder, id], focused: id };
-        resolver?.(id);
-      },
-      'open-modal': (p: { spec: ModalSpec }) => {
-        state = { ...state, modals: [...state.modals, p.spec] };
-      },
-      'close': (p: { id: string; result?: unknown }) => {
-        const modalIdx = state.modals.findIndex((m) => m.id === p.id);
-        if (modalIdx >= 0) {
-          const resolver = pendingResolvers.get(p.id);
-          pendingResolvers.delete(p.id);
-          state = { ...state, modals: state.modals.filter((m) => m.id !== p.id) };
-          resolver?.(p.result);
-          return;
-        }
-        if (state.panels[p.id]) {
-          const { [p.id]: _drop, ...rest } = state.panels;
-          void _drop;
-          const zOrder = state.zOrder.filter((x) => x !== p.id);
-          const focused = state.focused === p.id ? (zOrder[zOrder.length - 1] ?? null) : state.focused;
-          state = { ...state, panels: rest, zOrder, focused };
-        }
-      },
-      'focus': (p: { id: string }) => {
-        const panel = state.panels[p.id];
-        if (!panel) return;
-        if (panel.dock !== null) state = { ...state, focused: p.id };
-        else moveTop(p.id);
-      },
-      'dock': (p: { id: string; anchor: DockAnchor }) => {
-        const panel = state.panels[p.id];
-        if (!panel) return;
-        const existing = panelInDock(state.panels, p.anchor);
-        let panels = state.panels;
-        let zOrder = state.zOrder;
-        if (existing && existing.id !== p.id) {
-          const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
-          panels = { ...panels, [restored.id]: restored };
-          if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
-        }
-        panels = { ...panels, [p.id]: { ...panel, dock: p.anchor } };
-        zOrder = zOrder.filter((x) => x !== p.id);
-        state = { ...state, panels, zOrder, focused: p.id };
-      },
-      'undock': (p: { id: string }) => {
-        const panel = state.panels[p.id];
-        if (!panel || panel.dock === null) return;
-        const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
-        state = {
-          ...state,
-          panels: { ...state.panels, [p.id]: floating },
-          zOrder: state.zOrder.includes(p.id) ? state.zOrder : [...state.zOrder, p.id],
-          focused: p.id,
-        };
-      },
-      'set-query': (p: { q: string }) => {
-        const top = state.modals[state.modals.length - 1];
-        if (top?.kind === 'command-palette') {
-          state = { ...state, modals: [...state.modals.slice(0, -1), { ...top, query: p.q }] };
-        }
-      },
-      'set-body': (p: { id: string; body: string }) => {
-        const panel = state.panels[p.id];
-        if (panel) setPanel({ ...panel, body: p.body });
-      },
-      'reset': () => {
-        for (const [, resolver] of pendingResolvers) resolver(undefined);
-        pendingResolvers.clear();
-        state = emptySnapshot();
-        clearPersistedLayout();
-      },
-      'load-layout': () => {
-        const layout = readPersistedLayout();
-        if (!layout) return;
-        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
-        state = {
-          ...emptySnapshot(),
-          panels: layout.panels,
-          zOrder: surviving,
-          dockSizes: layout.dockSizes ?? state.dockSizes,
-          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
-        };
-      },
-    };
-    createTrigger<LifecycleSchema>({
-      id: 'lifecycle',
-      events: ['open-panel', 'open-modal', 'close', 'focus', 'set-query', 'set-body', 'dock', 'undock', 'reset', 'load-layout'],
-      schedule: 'sync',
-      handler: ({ event, actions }) => {
-        lifecycleTable[event.name]?.(event.payload);
-        actions.snapshot?.(state);
-        runtime.fire('changed');
-      },
-    }, runtime);
-
-    const pointerTable: Record<string, Fn> = {
-      'start-drag': (p: { id: string; px: number; py: number }) => {
-        const panel = state.panels[p.id];
-        if (!panel || panel.dock !== null) return;
-        moveTop(p.id);
-        state = {
-          ...state,
-          interaction: { kind: 'drag', id: p.id, offset: { x: p.px - panel.x, y: p.py - panel.y } },
-        };
-      },
-      'start-resize': (p: { id: string; px: number; py: number }) => {
-        const panel = state.panels[p.id];
-        if (!panel || panel.dock !== null) return;
-        moveTop(p.id);
-        state = {
-          ...state,
-          interaction: {
-            kind: 'resize',
-            id: p.id,
-            startSize: { w: panel.w, h: panel.h },
-            startPointer: { x: p.px, y: p.py },
-          },
-        };
-      },
-      'start-dock-resize': (p: { anchor: DockAnchor; px: number; py: number }) => {
-        state = {
-          ...state,
-          interaction: {
-            kind: 'dock-resize',
-            anchor: p.anchor,
-            startSize: state.dockSizes[p.anchor],
-            startPointer: p.anchor === 'bottom' ? p.py : p.px,
-          },
-        };
-      },
-      'pointer-up': () => {
-        if (state.interaction) {
-          state = { ...state, interaction: null };
-          runtime.fire('flush');
-        }
-      },
-    };
-    createTrigger<PointerSchema>({
-      id: 'pointer',
-      events: ['start-drag', 'start-resize', 'start-dock-resize', 'pointer-move', 'pointer-up'],
+    createTrigger<Schema>({
+      id: 'workspace',
+      events: ['mutate', 'pointer-move'],
       schedule: 'sync',
       handler: ({ event, actions }) => {
         if (event.name === 'pointer-move') {
-          if (!state.interaction) return;
-          // The actual pixel write is throttled — the `apply-move` action
-          // runs at most once per POINTER_THROTTLE_MS.
           actions.throttle(POINTER_THROTTLE_MS)['apply-move']?.(event.payload);
           return;
         }
-        pointerTable[event.name]?.(event.payload);
+        // mutate
+        state = event.payload.fn(state);
         actions.snapshot?.(state);
-        runtime.fire('changed');
+        actions.debounce(PERSIST_DEBOUNCE_MS).persist?.(state);
       },
     }, runtime);
 
-    runtime.subscribeAction('pointer', 'apply-move', (raw) => {
+    runtime.subscribeAction('workspace', 'apply-move', (raw) => {
       const { px, py } = raw as { px: number; py: number };
       const inter = state.interaction;
       if (!inter) return;
       const viewport = getViewport();
-      if (inter.kind === 'dock-resize') {
-        const cur = inter.anchor === 'bottom' ? py : px;
-        let delta = cur - inter.startPointer;
-        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
-        const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
-        state = { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
-        emit();
-        return;
-      }
-      const panel = state.panels[inter.id];
-      if (!panel) return;
-      if (inter.kind === 'drag') {
+      if (inter.kind === 'drag-floating') {
+        const panel = state.panels[inter.id];
+        if (!panel) return;
         const moved = { ...panel, x: px - inter.offset.x, y: py - inter.offset.y };
         const clamped = clampPanelToViewport(moved, viewport);
-        setPanel(snapToEdges(clamped, viewport));
-      } else if (inter.kind === 'resize') {
+        const others = Object.values(state.panels).filter((p) => p.id !== inter.id && p.mode === 'floating');
+        const snapped = snapFloating(clamped, viewport, others);
+        set({ ...state, panels: { ...state.panels, [inter.id]: snapped } });
+      } else if (inter.kind === 'resize-floating') {
+        const panel = state.panels[inter.id];
+        if (!panel) return;
         const dx = px - inter.startPointer.x;
         const dy = py - inter.startPointer.y;
-        const sized = clampResize(
-          inter.startSize.w + dx,
-          inter.startSize.h + dy,
-          { x: panel.x, y: panel.y },
-          viewport,
-        );
-        setPanel({ ...panel, ...sized });
+        const sized = clampResize(inter.startSize.w + dx, inter.startSize.h + dy, { x: panel.x, y: panel.y }, viewport);
+        set({ ...state, panels: { ...state.panels, [inter.id]: { ...panel, ...sized } } });
+      } else if (inter.kind === 'divider-resize') {
+        const container = findContainer(state.tree, inter.containerId);
+        if (!container) return;
+        const delta = (container.dir === 'row' ? px : py) - inter.startPointer;
+        const next = resizeContainerDivider(inter.startSizes, inter.dividerIdx, delta, inter.containerLength);
+        set({ ...state, tree: setContainerSizes(state.tree!, inter.containerId, next) });
       }
-      emit();
+    });
+    runtime.subscribeAction('workspace', 'persist', (s) => persistLayout(s as WS));
+    runtime.subscribeAction('workspace', 'snapshot', (s) => {
+      for (const cb of subs) cb(s as WS);
     });
 
-    createTrigger<KeyboardSchema>({
-      id: 'keyboard',
-      events: ['key'],
-      schedule: 'sync',
-      handler: ({ event }) => {
-        const { key, meta, ctrl } = event.payload;
-        const mod = meta || ctrl;
-        if (mod && (key === 'k' || key === 'K')) {
-          runtime.fire('open-modal', {
-            spec: { kind: 'command-palette', id: genId('modal'), query: '', commands: COMMAND_PALETTE_COMMANDS },
-          });
-          handledKey = true;
-          return;
-        }
-        if (key === 'Escape') {
-          const top = state.modals[state.modals.length - 1];
-          if (top) {
-            runtime.fire('close', { id: top.id, result: top.kind === 'confirm' ? false : top.kind === 'command-palette' ? null : undefined });
-            handledKey = true;
-          } else if (state.focused) {
-            runtime.fire('close', { id: state.focused });
-            handledKey = true;
-          }
-          return;
-        }
-        if (mod && (key === 'w' || key === 'W') && state.modals.length === 0 && state.focused) {
-          runtime.fire('close', { id: state.focused });
-          handledKey = true;
-        }
-      },
-    }, runtime);
-    let handledKey = false;
+    const mutate = (fn: (s: WS) => WS) => runtime.fire('mutate', { fn });
 
-    createTrigger<PersistSchema>({
-      id: 'persist',
-      events: ['changed', 'flush'],
-      schedule: 'sync',
-      handler: ({ event, actions }) => {
-        if (event.name === 'flush') {
-          actions.write?.(state);
-        } else {
-          actions.debounce(PERSIST_DEBOUNCE_MS).write?.(state);
-        }
-      },
-    }, runtime);
-    runtime.subscribeAction('persist', 'write', (s) => persistLayout(s as WorkspaceSnapshot));
-
-    // Snapshot fan-out
-    const fan = (s: unknown) => { for (const cb of subs) cb(s as WorkspaceSnapshot); };
-    runtime.subscribeAction('lifecycle', 'snapshot', fan);
-    runtime.subscribeAction('pointer', 'snapshot', fan);
-    runtime.subscribeAction('keyboard', 'snapshot', fan);
+    // ─── reducer helpers ─────────────────────────────────────────────
+    const total = (s: WS) => Object.keys(s.panels).length;
+    const moveFloatingTop = (s: WS, id: string): WS => ({
+      ...s,
+      floatingZOrder: [...s.floatingZOrder.filter((x) => x !== id), id],
+      focused: id,
+    });
+    const pushModal = (s: WS, spec: ModalSpec): WS => ({ ...s, modals: [...s.modals, spec] });
 
     return {
       snapshot: () => state,
       subscribe(cb) { subs.add(cb); return (() => subs.delete(cb)) as Unsubscribe; },
 
-      openPanel(kind, opts) {
-        // We can't return synchronously through `fire(...)` because the action
-        // dispatch is microtask-batched in real apps; but our schedule is 'sync'
-        // so we can capture the new id from the lifecycle handler via reqId.
-        const reqId = ++openReqId;
-        let result: string | null = null;
-        openReqResolvers.set(reqId, (id) => { result = id; });
-        runtime.fire('open-panel', { kind, reqId, ...(opts ?? {}) });
-        return result;
+      openPanel(kind: PanelKind, opts) {
+        if (total(state) >= MAX_PANELS) return null;
+        const id = genId('panel');
+        const mode = opts?.mode ?? 'tiled';
+        const panel: Panel = {
+          id, kind,
+          title: opts?.title ?? defaultTitle(kind),
+          body: opts?.body ?? defaultBody(kind),
+          mode,
+          ...defaultFloatingGeometry(kind),
+          ...(kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+        };
+        mutate((s) => {
+          const panels = { ...s.panels, [id]: panel };
+          if (mode === 'tiled') {
+            return { ...s, panels, tree: appendToTreeRight(s.tree, id), focused: id };
+          }
+          return { ...s, panels, floatingZOrder: [...s.floatingZOrder, id], focused: id };
+        });
+        return id;
       },
       alert(title, body) {
         return new Promise<void>((resolve) => {
           const id = genId('modal');
           pendingResolvers.set(id, () => resolve());
-          runtime.fire('open-modal', { spec: { kind: 'alert', id, title, body } });
+          mutate((s) => pushModal(s, { kind: 'alert', id, title, body }));
         });
       },
       confirm(title, body) {
         return new Promise<boolean>((resolve) => {
           const id = genId('modal');
           pendingResolvers.set(id, (r) => resolve(Boolean(r)));
-          runtime.fire('open-modal', { spec: { kind: 'confirm', id, title, body } });
+          mutate((s) => pushModal(s, { kind: 'confirm', id, title, body }));
         });
       },
       openCommandPalette(commands) {
         return new Promise<string | null>((resolve) => {
           const id = genId('modal');
           pendingResolvers.set(id, (r) => resolve(typeof r === 'string' ? r : null));
-          runtime.fire('open-modal', { spec: { kind: 'command-palette', id, query: '', commands } });
+          mutate((s) => pushModal(s, { kind: 'command-palette', id, query: '', commands }));
         });
       },
-      close: (id, result) => runtime.fire('close', { id, result }),
-      focus: (id) => runtime.fire('focus', { id }),
-      setQuery: (q) => runtime.fire('set-query', { q }),
-      setBody: (id, body) => runtime.fire('set-body', { id, body }),
-      dock: (id, anchor) => runtime.fire('dock', { id, anchor }),
-      undock: (id) => runtime.fire('undock', { id }),
-      startDrag: (id, px, py) => runtime.fire('start-drag', { id, px, py }),
-      startResize: (id, px, py) => runtime.fire('start-resize', { id, px, py }),
-      startDockResize: (anchor, px, py) => runtime.fire('start-dock-resize', { anchor, px, py }),
-      pointerMove: (px, py) => runtime.fire('pointer-move', { px, py }),
-      pointerUp: () => runtime.fire('pointer-up'),
-      onKey(e) {
-        handledKey = false;
-        runtime.fire('key', e);
-        return handledKey;
+      close(id, result) {
+        if (state.modals.some((m) => m.id === id)) {
+          const r = pendingResolvers.get(id); pendingResolvers.delete(id);
+          mutate((s) => ({ ...s, modals: s.modals.filter((m) => m.id !== id) }));
+          r?.(result);
+          return;
+        }
+        mutate((s) => {
+          if (!s.panels[id]) return s;
+          const { [id]: _drop, ...rest } = s.panels; void _drop;
+          const tree = removeFromTree(s.tree, id);
+          const floatingZOrder = s.floatingZOrder.filter((x) => x !== id);
+          const focused = s.focused === id ? (floatingZOrder[floatingZOrder.length - 1] ?? null) : s.focused;
+          return { ...s, panels: rest, tree, floatingZOrder, focused };
+        });
       },
-      loadLayout: () => runtime.fire('load-layout'),
-      reset: () => runtime.fire('reset'),
-      dispose: () => runtime.dispose(),
+      focus(id) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p) return s;
+          return p.mode === 'floating' ? moveFloatingTop(s, id) : { ...s, focused: id };
+        });
+      },
+      setBody(id, body) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p) return s;
+          return { ...s, panels: { ...s.panels, [id]: { ...p, body } } };
+        });
+      },
+      setInspectorMode(id, mode) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p || p.kind !== 'inspector') return s;
+          return { ...s, panels: { ...s.panels, [id]: { ...p, inspectorMode: mode } } };
+        });
+      },
+      setQuery(q) {
+        mutate((s) => {
+          const top = s.modals[s.modals.length - 1];
+          if (top?.kind !== 'command-palette') return s;
+          return { ...s, modals: [...s.modals.slice(0, -1), { ...top, query: q }] };
+        });
+      },
+      setPanelMode(id, mode) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p || p.mode === mode) return s;
+          if (mode === 'floating') {
+            return {
+              ...s,
+              panels: { ...s.panels, [id]: { ...p, mode: 'floating', x: p.x || 120, y: p.y || 120, w: p.w || 360, h: p.h || 240 } },
+              tree: removeFromTree(s.tree, id),
+              floatingZOrder: [...s.floatingZOrder, id],
+              focused: id,
+            };
+          }
+          return {
+            ...s,
+            panels: { ...s.panels, [id]: { ...p, mode: 'tiled' } },
+            tree: appendToTreeRight(s.tree, id),
+            floatingZOrder: s.floatingZOrder.filter((x) => x !== id),
+            focused: id,
+          };
+        });
+      },
+      splitTile(srcId, targetId, edge) {
+        mutate((s) => {
+          const src = s.panels[srcId]; if (!src) return s;
+          if (!findLeaf(s.tree, targetId) || srcId === targetId) return s;
+          let tree = src.mode === 'tiled' ? removeFromTree(s.tree, srcId) : s.tree;
+          let floatingZOrder = s.floatingZOrder;
+          if (src.mode === 'floating') floatingZOrder = floatingZOrder.filter((x) => x !== srcId);
+          if (!tree) tree = removeFromTree(s.tree, srcId);
+          tree = splitAt(tree!, targetId, edge, srcId);
+          return {
+            ...s,
+            panels: { ...s.panels, [srcId]: { ...src, mode: 'tiled' } },
+            tree, floatingZOrder, focused: srcId, interaction: null,
+          };
+        });
+      },
+      arrangeCascadeFloating() {
+        mutate((s) => {
+          const fpanels = s.floatingZOrder.map((id) => s.panels[id]).filter((p): p is Panel => !!p);
+          if (fpanels.length === 0) return s;
+          const next = cascadeFloating(fpanels, getViewport());
+          const panels = { ...s.panels };
+          for (const p of next) panels[p.id] = p;
+          return { ...s, panels };
+        });
+      },
+      arrangeMosaicTiled() { mutate((s) => ({ ...s, tree: buildMosaic(flattenPanelIds(s.tree)) })); },
+      arrangeRows() { mutate((s) => ({ ...s, tree: buildRow(flattenPanelIds(s.tree)) })); },
+      arrangeColumns() { mutate((s) => ({ ...s, tree: buildColumn(flattenPanelIds(s.tree)) })); },
+      arrangeEqualizeTiles() { mutate((s) => ({ ...s, tree: equalizeTree(s.tree) })); },
+      setAllPanelsMode(mode) {
+        mutate((s) => {
+          const allIds = Object.keys(s.panels);
+          const panels = { ...s.panels };
+          for (const id of allIds) panels[id] = { ...panels[id]!, mode };
+          if (mode === 'floating') return { ...s, panels, tree: null, floatingZOrder: allIds };
+          return { ...s, panels, tree: buildMosaic(allIds), floatingZOrder: [] };
+        });
+      },
+      startFloatingDrag(id, px, py) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p || p.mode !== 'floating') return s;
+          const moved = moveFloatingTop(s, id);
+          return { ...moved, interaction: { kind: 'drag-floating', id, offset: { x: px - p.x, y: py - p.y } } };
+        });
+      },
+      startTileDrag(id) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p || p.mode !== 'tiled') return s;
+          return { ...s, interaction: { kind: 'drag-tiled', id, targetLeafId: null, targetZone: null } };
+        });
+      },
+      startFloatingResize(id, px, py) {
+        mutate((s) => {
+          const p = s.panels[id]; if (!p || p.mode !== 'floating') return s;
+          const moved = moveFloatingTop(s, id);
+          return { ...moved, interaction: { kind: 'resize-floating', id, startSize: { w: p.w, h: p.h }, startPointer: { x: px, y: py } } };
+        });
+      },
+      startDividerResize(containerId, dividerIdx, px, py, containerLengthPx) {
+        mutate((s) => {
+          const c = findContainer(s.tree, containerId); if (!c) return s;
+          return {
+            ...s,
+            interaction: {
+              kind: 'divider-resize', containerId, dividerIdx,
+              startSizes: [...c.sizes], startPointer: c.dir === 'row' ? px : py,
+              containerLength: containerLengthPx,
+            },
+          };
+        });
+      },
+      pointerMove(px, py) {
+        if (!state.interaction) return;
+        runtime.fire('pointer-move', { px, py });
+      },
+      setTileDropTarget(leafId, zone) {
+        mutate((s) => {
+          const inter = s.interaction;
+          if (inter?.kind !== 'drag-tiled') return s;
+          if (inter.targetLeafId === leafId && inter.targetZone === zone) return s;
+          return { ...s, interaction: { ...inter, targetLeafId: leafId, targetZone: zone } };
+        });
+      },
+      pointerUp() {
+        const inter = state.interaction;
+        if (!inter) return;
+        if (inter.kind === 'drag-tiled' && inter.targetLeafId && inter.targetZone) {
+          const findByNode = (t: WS['tree'], nid: string): string | null => {
+            if (!t) return null;
+            if (t.kind === 'leaf') return t.id === nid ? t.panelId : null;
+            for (const c of t.children) { const r = findByNode(c, nid); if (r) return r; }
+            return null;
+          };
+          const targetPanelId = findByNode(state.tree, inter.targetLeafId);
+          if (targetPanelId && targetPanelId !== inter.id) {
+            const edge = inter.targetZone === 'center' ? 'right' : inter.targetZone;
+            this.splitTile(inter.id, targetPanelId, edge);
+            return;
+          }
+        }
+        mutate((s) => ({ ...s, interaction: null }));
+      },
+      setCursor(x, y, overPanelId) {
+        if (state.cursor.x === x && state.cursor.y === y && state.cursor.overPanelId === overPanelId) return;
+        mutate((s) => ({ ...s, cursor: { x, y, overPanelId } }));
+      },
+      onKey({ key, meta, ctrl }) {
+        const mod = meta || ctrl;
+        if (mod && (key === 'k' || key === 'K')) { this.openCommandPalette(COMMAND_PALETTE_COMMANDS); return true; }
+        if (key === 'Escape') {
+          const tm = state.modals[state.modals.length - 1];
+          if (tm) { this.close(tm.id, tm.kind === 'confirm' ? false : tm.kind === 'command-palette' ? null : undefined); return true; }
+          if (state.focused) { this.close(state.focused); return true; }
+          return false;
+        }
+        if (mod && (key === 'w' || key === 'W') && state.modals.length === 0 && state.focused) {
+          this.close(state.focused); return true;
+        }
+        return false;
+      },
+      loadLayout() {
+        const layout = readPersistedLayout();
+        if (!layout) return;
+        const validIds = new Set(Object.keys(layout.panels));
+        mutate(() => ({
+          ...emptySnapshot(),
+          panels: layout.panels,
+          tree: layout.tree,
+          floatingZOrder: layout.floatingZOrder.filter((id) => validIds.has(id)),
+          focused: validIds.has(layout.focused ?? '') ? layout.focused : null,
+        }));
+      },
+      reset() {
+        for (const [, r] of pendingResolvers) r(undefined);
+        pendingResolvers.clear();
+        mutate(() => emptySnapshot());
+        clearPersistedLayout();
+      },
+      dispose() { runtime.dispose(); subs.clear(); pendingResolvers.clear(); },
     };
   },
 };

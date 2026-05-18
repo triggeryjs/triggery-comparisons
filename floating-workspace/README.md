@@ -1,94 +1,96 @@
 # Floating workspace
 
-A real-prototype-grade IDE-like window manager — **floating panels** (drag, resize, snap, z-order) **plus three dock slots** (left / right / bottom) with shared resize dividers, ESC/⌘W/⌘K keyboard, modal stack with `alert` / `confirm` / command-palette returning typed promises, persisted layout. Same UI, **nine implementations**, one frozen 28-rule spec.
+A real-prototype-grade IDE-like window manager — **tree-based tiling** (drag a tile to split any other tile in 4 directions, dividers between every pair of siblings, no fixed dock slots), **per-panel mode toggle** (each panel is independently `tiled` or `floating`), **panel-to-panel snap** when dragging floats, **live inspectors** that follow real workspace state (cursor, focus, tree shape), command palette, modal stack, persisted layout. Same UI, **nine implementations**, one frozen spec.
 
-This is the deliberately-hardest scenario in the repo. Pointer-move events at 60 fps are a stream; window state is a record with two regions (floating panels + 3 dock slots); keyboard routing is event dispatch; promise-returning modals are async glue. Each library is good at one or two of those four and pays for the others. The leaderboard reshuffles accordingly — read on for an honest spread.
+This is the hardest scenario in the repo. Pointer events at 60 fps are a stream; the layout is a recursive tree (`Container | Leaf`); per-panel mode flips reshape tree and floating-z-order atomically; keyboard routing is event dispatch; promise-returning modals are async glue. Each library is good at one or two of those four and pays for the others. The leaderboard reshuffles accordingly — read on for an honest spread.
 
 ## Headline numbers
 
-|                                  | best                              | worst                            | triggery |
+|                                  | best                                     | worst                                | triggery |
 |---|---|---|---|
-| **LOC**                          | redux-thunk — 253                 | xstate — 424                     | 8th (391) |
-| **Bundle (gzipped)**             | reatom — 5.17 KB                  | redux-saga — 16.98 KB            | **3rd** (6.99 KB) |
-| **API surface (imports)**        | **triggery — 1 / 2 symbols**      | rxjs — 2 / 13 symbols            | **1st** |
-| **Dependency footprint**         | **triggery — 1 package** *(tied)* | redux-saga — 12 packages         | **tied 1st** |
-| **Drag throughput (events/sec)** | redux-thunk — 7.8M *(throttle-honoring)* | RTK — 75k                       | 6th (231k) |
-| **setBody latency p50**          | naked — 0.67 µs                   | RTK — 6.7 µs                     | 4th (2.5 µs) |
-| **Cyclomatic complexity**        | rtk / saga — 57                   | xstate — 74                      | 7th (68) |
+| **LOC** (engine file only)       | redux-thunk — 168 *(+ 202 shared slice)* | naked — 507                          | 4th (344) |
+| **Bundle (gzipped)**             | naked — 4.21 KB                          | redux-saga — 18.67 KB                | **3rd** (8.23 KB) |
+| **API surface (symbols)**        | **triggery — 2** *(tied)*                | rxjs — 12 symbols                    | **1st** *(tied with reatom / effector)* |
+| **Dependency footprint**         | naked — 0 packages                       | redux-saga — 12 packages             | **tied 2nd** *(1 package)* |
+| **Drag throughput (events/sec)** | naked — 7.8M *(throttle-honoring)*       | rtk-listener — 25k                   | 7th (269k) |
+| **setBody latency p50**          | naked — 0.67 µs                          | rtk-listener — 7.6 µs                | 3rd (2.7 µs) |
+| **Cyclomatic complexity**        | redux-saga — 32 *(slice excluded)*       | rxjs — 116                           | 5th (93) |
 
 Three things to read off this honest table:
 
-1. **Triggery doesn't win LOC here.** A simple slice + reducer (RTK-style) is the shortest way to express "28 rules over a record state with one big mutator" — `redux-thunk` ships at 253 LOC, `rtk-listener` at 259, `redux-saga` at 264, `reatom` at 266. Triggery's 4-trigger split (lifecycle / pointer / keyboard / persist) is structural overhead this scenario doesn't amortise. It's the right shape for the **vocabulary** (`actions.throttle(16)` is a one-liner), but the four trigger setups + four dispatch tables eat the savings.
-2. **Bundle, API surface, and dependency footprint are still Triggery's home turf.** 6.99 KB gz (still beats effector / rxjs / redux family on weight), one import / two symbols / one npm package. The Redux family ships 5 packages just to start; saga ships 12.
-3. **Throughput numbers tell two stories at once.** The naïve `events/sec` column makes Redux + thunk look fastest (7.8M ev/sec) — but that engine is *not* applying every event: its hand-rolled `lastMoveTime` throttle drops 997 of 1000 incoming `pointerMove`s and only fires 3 snapshot updates. RxJS does the same with `throttleTime(16)`. Triggery and naked also throttle to 3 snapshots out of 1000 events. **XState is the outlier — it produces 1002 snapshots from 1000 events** because its idiomatic `cancel + raise + delay` pattern is *debounce-shaped, not throttle-shaped*. We call that out honestly below.
+1. **Triggery doesn't win LOC here, and it's an honest loss.** The three Redux engines look small (168-172 LOC each) because they share `_redux-slice.ts` (202 LOC). The real total for any one of them is ≈ 370 LOC — slightly worse than Triggery's 344. Reatom (338) is the lowest single-file count thanks to its single mutator-action pattern.
+2. **Triggery's home turf is still bundle, API surface, and dependency footprint.** 8.23 KB gz (3rd, beats both redux + rxjs + xstate), 2 symbols (`createTrigger` + `createRuntime`), 1 npm package. The Redux family ships 5 packages just to start; saga ships 12.
+3. **Throughput numbers tell two stories.** The naïve `events/sec` column makes naked / redux-thunk / reatom / effector look fastest — but those engines also throttle to **3 snapshots per 1000 events**, which is the intended ~60 fps cap. Triggery throttles to 3 as well; it just pays more per dispatch (each event goes through the trigger runtime). **XState, RTK listener, redux-saga** are the outliers — their idiomatic `cancel + delay` / `throttle(effect)` patterns fire 1000+ snapshots from 1000 events (debounce-shaped, not throttle-shaped). We call that out honestly below.
 
 ## The 9 engines
 
-- [`triggery`](./src/engines/triggery.ts) — four triggers (lifecycle / pointer / keyboard / persist), `actions.throttle(16)` + `actions.debounce(1000)` declarative
-- [`xstate`](./src/engines/xstate.ts) — `idle`/`dragging`/`resizing` as top-level states; `raise+cancel` for throttle (see honest caveat below)
-- [`effector`](./src/engines/effector.ts) — events + one `$workspace` store + hand-rolled timers
-- [`rxjs`](./src/engines/rxjs.ts) — `Subject<Action>` + `scan` reducer + `throttleTime` + `debounceTime`
-- [`reatom`](./src/engines/reatom.ts) — atoms + actions, mutator-action, hand-rolled timers
-- [`rtk-listener`](./src/engines/rtk-listener.ts) — slice + listeners with `cancelActiveListeners()` + `delay()`
-- [`redux-thunk`](./src/engines/redux-thunk.ts) — slice + thunks + hand-rolled timers
-- [`redux-saga`](./src/engines/redux-saga.ts) — slice + sagas (`throttle` / `debounce` effects)
-- [`naked`](./src/engines/naked.ts) — no library, mutable state, hand-rolled timers
+- [`triggery`](./src/engines/triggery.ts) — single `workspace` trigger with two events (`mutate` carrying a reducer fn, `pointer-move` throttled via `actions.throttle(16)`); state in closure
+- [`xstate`](./src/engines/xstate.ts) — `idle` ↔ `interacting` statechart; `raise + cancel` for pointer debounce + persist
+- [`effector`](./src/engines/effector.ts) — 25 events + one `$workspace` store; hand-rolled throttle + debounce
+- [`rxjs`](./src/engines/rxjs.ts) — `Subject<Action>` + `scan` reducer + `throttleTime(16)` + `debounceTime(1000)`
+- [`reatom`](./src/engines/reatom.ts) — one atom + one `mutate(fn)` action; hand-rolled timers
+- [`rtk-listener`](./src/engines/rtk-listener.ts) — shared slice + listeners (`cancelActiveListeners + delay`)
+- [`redux-thunk`](./src/engines/redux-thunk.ts) — shared slice + thunks for `pointerMove` / `pointerUp`; hand-rolled timers
+- [`redux-saga`](./src/engines/redux-saga.ts) — shared slice + sagas (`throttle(16, …)` + `debounce(1000, …)` as effects)
+- [`naked`](./src/engines/naked.ts) — no library, mutable state, hand-rolled timers; the reference impl other engines mirror
+
+The three redux engines share [`_redux-slice.ts`](./src/engines/_redux-slice.ts) (202 LOC) — they differ **only in how side-effects are wired**: thunks vs listenerMiddleware vs sagas. The shared-slice trick mirrors a real codebase (you wouldn't copy-paste the slice three times) and isolates the side-effect-vocabulary comparison from the reducer-vocabulary comparison.
 
 ## Acceptance behaviour (the spec — frozen)
 
-28 rules over 8 concerns. Every engine satisfies them identically.
-
 ### Lifecycle
 
-- **R1.** `openPanel(kind)` adds a floating window with a unique id and seeded position.
-- **R2.** `close(id)` removes any window (floating or docked). For modal openers the awaiting promise resolves with the result.
-- **R3.** Max **5 panels total** (floating + docked combined). Subsequent `openPanel` returns `null`.
+- **R1.** `openPanel(kind, { mode })` adds a panel; `mode` defaults to `tiled` (appended right of tree) or `floating` (added to z-order top with a staggered seed position).
+- **R2.** `close(id)` removes any window (tiled, floating, or modal). For modal openers the awaiting promise resolves.
+- **R3.** Max **8 panels total** (tiled + floating combined). Subsequent `openPanel` returns `null`.
 - **R4.** Modals stack — a second `open` adds to the top; ESC closes the top one.
 
-### Drag (floating panels only)
+### Tile tree (tiled panels)
 
-- **R5.** Pointerdown on title bar → start drag; capture offset from panel's top-left.
-- **R6.** Pointermove → update position, **throttled to ~60 fps** (16 ms window).
-- **R7.** Pointerup → end drag, flush persist.
-- **R8.** Clamp to viewport: the window cannot be dragged off-screen.
-- **R9.** Snap to edge when within 12 px (top/left/right/bottom).
-- **R29.** Docked panels do NOT drag from their title bar (only undock or close).
+- **R5.** Layout is `TileNode = TileContainer { dir: 'row' | 'col', children, sizes } | TileLeaf { panelId }`. Containers split children with shared dividers; sizes are percentages summing to ~100.
+- **R6.** `splitTile(srcId, targetId, edge)` inserts `srcId` adjacent to `targetId` on `'top' | 'right' | 'bottom' | 'left'`. If `srcId` was floating, it transitions to tiled; if it was elsewhere in the tree, it's atomically removed + re-inserted.
+- **R7.** Drag-to-split UI: drag a tile's title bar; while dragging, hovering over another leaf shows a **5-zone overlay** (top/right/bottom/left/center). Drop commits the split (center → right).
+- **R8.** `startDividerResize(containerId, dividerIdx, …)` drags a divider; sizes clamp so every tile is ≥ 120 px.
+- **R9.** When a tile is removed, its container collapses if down to one child (the lone child replaces the container in its parent).
 
-### Resize (floating panels)
+### Floating panels
 
-- **R10.** Pointerdown on the bottom-right handle → start resize.
-- **R11.** Pointermove → update size, throttled like drag.
-- **R12.** Min 200×120; max = viewport.
+- **R10.** `setPanelMode(id, 'floating')` removes the panel from the tree (collapse rules apply) and adds it to z-order top with its remembered geometry.
+- **R11.** Drag (title bar) → update position, **throttled to 16 ms**. Clamp to viewport.
+- **R12.** Resize (bottom-right handle) → update size, throttled. Min 200 × 120; max = viewport.
+- **R13.** Pointerdown on a floating panel → focus + bring to top of z-order.
+- **R14.** **Snap during drag** is computed against viewport edges *and* every other floating panel's 8 alignment points (edges + half-edges + corners). Snap threshold: 12 px.
 
-### Focus / z-order
+### Mode toggle
 
-- **R13.** Pointerdown anywhere on a floating panel → bring to top + focus.
-- **R14.** Modals always above all floating panels.
+- **R15.** `setPanelMode(id, 'tiled')` removes from z-order, appends to the right side of the tree. (Inverse of R10.)
+- **R16.** `setAllPanelsMode('tiled' | 'floating')` flips every panel to the chosen mode at once (used by palette commands "Tile all" / "Float all").
+- **R17.** Title bar shows `↗` (Float) when tiled and `⇲` (Tile) when floating.
+
+### Arrange commands
+
+- **R18.** Palette includes: cascade floating, mosaic tiled, rows, columns, equalize tiles.
+
+### Inspector
+
+- **R19.** Inspector panels carry an `inspectorMode: 'static' | 'state' | 'cursor' | 'tree'` toggle.
+- **R20.** `static` → fixed selection JSON. `state` → live focused id + panel count + interaction kind. `cursor` → live mouse x/y + `overPanelId` (resolved from `document.elementFromPoint`). `tree` → ASCII render of the current tree.
 
 ### Keyboard
 
-- **R15.** **ESC** → close top modal; otherwise close focused panel.
-- **R16.** **⌘K / Ctrl+K** → open command palette. Picking a command dispatches it through the engine façade.
-- **R17.** **⌘W / Ctrl+W** → close focused panel (only when no modal is open).
+- **R21.** **ESC** → close top modal; otherwise close focused panel.
+- **R22.** **⌘K / Ctrl+K** → open command palette.
+- **R23.** **⌘W / Ctrl+W** → close focused panel (only when no modal is open).
 
 ### Persistence
 
-- **R18.** Any layout change schedules a **debounced 1000 ms** localStorage write.
-- **R19.** On mount → restore saved layout (panels + dock slots + dock sizes).
-- **R20.** `reset()` clears state + localStorage.
-
-### Docking (Notion/VS Code-style)
-
-- **R21.** `dock(id, anchor)` moves a panel into one of three dock slots: `left` / `right` / `bottom`. The panel keeps its body but loses x/y; layout-wise it takes the whole slot.
-- **R22.** `undock(id)` returns a docked panel to floating with a sensible position.
-- **R23.** Only **one panel per dock slot**. Docking into an occupied slot kicks the existing one back to floating (lossless body, fresh position).
-- **R24.** Each occupied dock has a **shared resize divider** between itself and the main area. Pointerdown on the divider starts a `dock-resize` interaction.
-- **R25.** Dock-resize moves are throttled to 16 ms like drag. Dock size is clamped to `[160 px, 60 % of viewport]`.
-- **R26.** Three dock slots can be active simultaneously (left, right, bottom). Layout is CSS Grid; resizing a dock shrinks the main area accordingly.
+- **R24.** Any layout change schedules a **debounced 1000 ms** localStorage write. Pointer-up flushes immediately.
+- **R25.** On mount → restore saved layout (panels + tree + floating z-order + focused).
+- **R26.** `reset()` clears state + localStorage.
 
 ### Command palette
 
-- **R27.** Palette commands include: open note / open inspector / dock focused (left/right/bottom) / undock focused / close focused / reset workspace.
+- **R27.** Palette commands: open note, open inspector, float focused, tile focused, float all, tile all, arrange cascade-floating, arrange mosaic-tiled, arrange rows, arrange columns, equalize tiles, inspector mode picker (static/state/cursor/tree), close focused, reset workspace.
 - **R28.** Palette resolves to a command id; the UI maps it to an engine call.
 
 ## How to play with it
@@ -96,17 +98,17 @@ Three things to read off this honest table:
 ```bash
 pnpm install
 pnpm --filter triggery-comparison-floating-workspace dev
-# → http://localhost:5182/?engine=triggery
+# → http://localhost:5182/
 ```
 
 Switch engines: `?engine=triggery | xstate | effector | rxjs | reatom | rtk | redux-thunk | redux-saga | naked`. Try:
 
-- **+ Note** / **+ Inspector** — open panels.
-- **Drag the title bar** — move; release near an edge to snap.
-- **Drag the bottom-right corner** — resize.
-- **⌘K** — open command palette; type to filter; Enter or click to run.
-- **⌘W** — close focused.
-- **Esc** — close top modal or focused panel.
+- **📝 Note** / **🔍 Inspector** — open a tile (mode defaults to `tiled`).
+- **Drag tile title bar over another tile** — hover the 5-zone overlay to pick top/right/bottom/left/center, release to split.
+- **↗** in a tile header → detach to floating; **⇲** → re-attach to tiled.
+- **Drag a divider between two tiles** — resize both sides.
+- Inspector pills (`static / state / cursor / tree`) — switch live modes.
+- **⌘K** — palette; arrange commands reshape the tree instantly.
 
 ## Measurements
 
@@ -124,84 +126,88 @@ LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
 | engine | LOC | bytes |
 |---|---:|---:|
-| redux-thunk  |  253 | 11591 |
-| rtk-listener |  259 | 11865 |
-| redux-saga   |  264 | 11957 |
-| reatom       |  266 | 11190 |
-| effector     |  270 | 12258 |
-| rxjs         |  309 | 13788 |
-| naked        |  330 | 12035 |
-| **triggery** | **391** | **15944** |
-| xstate       |  424 | 18739 |
+| redux-thunk  | 168 *(+ slice 202)* |  8126 |
+| redux-saga   | 169 *(+ slice 202)* |  8347 |
+| rtk-listener | 172 *(+ slice 202)* |  8575 |
+| reatom       | 338 | 14937 |
+| **triggery** | **344** | **15712** |
+| effector     | 356 | 18741 |
+| rxjs         | 386 | 19398 |
+| xstate       | 498 | 22771 |
+| naked        | 507 | 17684 |
+| `_redux-slice.ts` (shared) | 202 | 10316 |
 
 Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised, `production` export condition:
 
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   6.41 KB |   2.65 KB |
-| reatom       |  12.49 KB |   5.17 KB |
-| **triggery** |  **19.60 KB** |   **6.99 KB** |
-| effector     |  19.95 KB |   8.75 KB |
-| redux-thunk  |  29.02 KB |  10.94 KB |
-| rtk-listener |  32.89 KB |  12.38 KB |
-| rxjs         |  33.82 KB |  10.88 KB |
-| redux-saga   |  45.80 KB |  16.98 KB |
-| xstate       |  48.02 KB |  15.82 KB |
+| naked        |  11.86 KB |   4.21 KB |
+| reatom       |  17.73 KB |   6.71 KB |
+| **triggery** |  **23.55 KB** |   **8.23 KB** |
+| effector     |  25.80 KB |  10.45 KB |
+| redux-thunk  |  35.33 KB |  12.66 KB |
+| rxjs         |  39.42 KB |  12.34 KB |
+| rtk-listener |  39.33 KB |  14.12 KB |
+| xstate       |  52.99 KB |  17.15 KB |
+| redux-saga   |  52.13 KB |  18.67 KB |
 
 ### Performance
 
 Two shapes per engine, single canonical run on M1 Pro / Node 20:
 
-- **Drag throughput** — fire 1000 `pointerMove` events in a tight loop while a drag is active. `events/sec` shows the dispatch path's cost; `snapshots / 1000` shows how many actually materialised after each engine's throttle. The intended answer is **≈ 3 snapshots** (1000 events ÷ 16 ms ≈ 3 fires in the loop window).
+- **Drag throughput** — fire 1000 `pointerMove` events in a tight loop while a floating-drag is active. `events/sec` shows the dispatch path's cost; `snapshots / 1000` shows how many actually materialised after each engine's throttle. The intended answer is **≈ 3 snapshots** (1000 events ÷ 16 ms ≈ 3 fires in the loop window).
 - **`setBody` latency** — single setBody → next snapshot fire, p50 / p95 / p99.
 
 | engine                 | drag events/sec | snapshots/1000 | setBody p50 | p95 | p99 |
 |---|---:|---:|---:|---:|---:|
-| Redux + thunk          |   7813k ev/sec |       3 |   4.5 µs |   5.7 µs |    16 µs |
-| Reatom                 |   4296k ev/sec |       3 |   2.5 µs |   3.9 µs |   9.4 µs |
-| Effector               |   3502k ev/sec |       3 |   4.6 µs |   9.1 µs |    16 µs |
-| Naked baseline         |   2814k ev/sec |       3 |  0.67 µs |  0.75 µs |   2.2 µs |
-| RxJS                   |   1815k ev/sec |       3 |   1.1 µs |   1.9 µs |   5.4 µs |
-| **Triggery**           |    **231k ev/sec** |    **3** |   **2.5 µs** |   **4.6 µs** |    **12 µs** |
-| Redux + saga           |    217k ev/sec |       3 |   4.4 µs |    26 µs |    46 µs |
-| **XState**             |     **87k ev/sec** | **1002** |   **4.7 µs** |    **19 µs** |    **57 µs** |
-| RTK listenerMiddleware |     75k ev/sec |       2 |   6.7 µs |    10 µs |    31 µs |
+| Naked baseline         |   7797k ev/sec |       3 |  0.67 µs |  0.75 µs |   1.9 µs |
+| Redux + thunk          |   4938k ev/sec |       3 |   4.2 µs |   6.8 µs |    25 µs |
+| Reatom                 |   4766k ev/sec |       3 |   2.4 µs |   3.2 µs |    11 µs |
+| Effector               |   4349k ev/sec |       3 |   3.6 µs |    16 µs |    39 µs |
+| RxJS                   |   2300k ev/sec |       3 |  0.96 µs |   1.1 µs |   4.6 µs |
+| Redux + saga           |    345k ev/sec |    1007 |   3.5 µs |    16 µs |    67 µs |
+| **Triggery**           |    **269k ev/sec** |    **3** |   **2.7 µs** |   **4.5 µs** |    **27 µs** |
+| **XState**             |     **84k ev/sec** | **1002** |   **4.5 µs** |   **6.8 µs** |    **25 µs** |
+| RTK listenerMiddleware |     25k ev/sec |    1004 |   7.6 µs |    14 µs |    47 µs |
 
-**Read with care.** The naïve `events/sec` ranking is misleading because most engines drop almost every event (that's the whole point of throttling). What you actually want to know:
+**Read with care.** The naïve `events/sec` ranking is misleading because the high-throughput engines drop almost every event (that's the whole point of throttling). What you actually want to know:
 
-- All engines except XState honour the throttle (3 snapshots from 1000 events).
-- **XState fires 1002 snapshots from 1000 events** because the `cancel('id') + raise(EV, { delay, id })` pattern is debounce-shaped: each pointer-move replaces the scheduled raise but the *cancel + raise* sequence itself emits state-transition events the subscriber sees. To get real throttle-shaped semantics in XState you need an explicit `cooling-down` sub-state with an `after` transition — that adds significant LOC and would push xstate even higher on the size axis.
-- Triggery's `actions.throttle(16)` honors the throttle (3 snapshots) and clocks 339k events/sec — slower per-event than thunk because the action goes through a runtime dispatch path, but fast enough that 60 fps is never the bottleneck.
+- All engines except XState / RTK listener / redux-saga honour the throttle (3 snapshots from 1000 events).
+- **XState's `cancel('id') + raise(EV, { delay, id })` is debounce-shaped**: the *cancel + raise* sequence itself emits transition events that subscribers observe. To get real throttle-shape you'd add a `cooling-down` sub-state with an `after` transition (≈ 20 more LOC).
+- **redux-saga's `throttle(16, action, saga)`** is actually throttle-shape on the *saga effect* but the per-action dispatch still hits the store and notifies subscribers on every action. The 1007 number reflects subscriber notifications, not saga executions.
+- **rtk-listener's `cancelActiveListeners + delay(16)`** is the same pattern as xstate — debounce-shaped at the listener layer but every `pointerMoveRequested` action still hits subscribers.
+- Triggery's `actions.throttle(16)` honors the throttle (3 snapshots). 269k events/sec is the per-dispatch cost of going through the trigger runtime — slower than thunk's direct `store.dispatch` but still ≫ what 60 fps needs.
 
 ### API surface — concepts you have to learn
 
 | engine | unique imports | symbols | primitive constructors |
 |---|---:|---:|---|
 | naked        | 0 | 0 | (pure JS) |
-| **triggery** | **1** | **2** | **`createTrigger`×4, `createRuntime`×1** |
+| **triggery** | **1** | **2** | `createTrigger`×1, `createRuntime`×1 |
 | reatom       | 1 | 3 | `atom`×1, `action`×1, `createCtx`×1 |
-| effector     | 1 | 2 | `createEvent`×15, `createStore`×1 |
-| redux-thunk  | 1 | 5 | `createSlice`×1 |
-| rtk-listener | 1 | 5 | `createAction`×1, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×2 |
-| xstate       | 1 | 6 | `setup`, `createMachine`, `createActor`, `assign`, `cancel`, `raise` |
-| redux-saga   | 3 | 12 | `createAction`×1, `createSlice`×1 + saga effects (`all`, `call`, `debounce`, `put`, `select`, `takeEvery`, `throttle`) |
-| rxjs         | 2 | 13 | `Subject`, `BehaviorSubject` + 7 operators (`scan`, `throttleTime`, `debounceTime`, `filter`, `merge`, `tap`, `share`, …) |
+| effector     | 1 | 2 | `createEvent`×25, `createStore`×1 |
+| redux-thunk  | 1 | 3 | `configureStore`, `ThunkAction`, `UnknownAction` |
+| rtk-listener | 1 | 3 | `createAction`×1, `createListenerMiddleware`×1 |
+| xstate       | 1 | 6 | `setup`, `assign`, `cancel`, `raise`, `createActor`, `ActorRefFrom` |
+| redux-saga   | 3 | 9 | `createAction`×1 + saga effects (`all`, `debounce`, `put`, `select`, `takeEvery`, `throttle`) |
+| rxjs         | 2 | 12 | `Subject`×2, `BehaviorSubject`×1 + 7 operators (`scan`, `throttleTime`, `debounceTime`, `filter`, `tap`, `share`, `distinctUntilChanged`, `map`, `merge`, `Subscription`) |
 
 ### Complexity & type safety
 
 | engine | cyclomatic | max nesting | `as` casts | `!` non-null |
 |---|---:|---:|---:|---:|
-| rtk-listener |    57 |       6 |  5 |  0 |
-| redux-saga   |    57 |       6 |  6 |  0 |
-| effector     |    61 |       7 |  1 |  0 |
-| reatom       |    62 |       8 |  1 |  0 |
-| redux-thunk  |    62 |       6 |  4 |  0 |
-| naked        |    64 |       7 |  1 |  0 |
-| **triggery** |    **68** |       **7** |  **3** |  **0** |
-| rxjs         |    73 |       7 |  1 |  0 |
-| xstate       |    74 |       8 |  4 |  0 |
+| redux-saga   |    32 |       6 |  1 |  0 |
+| rtk-listener |    33 |       7 |  1 |  0 |
+| redux-thunk  |    36 |       6 |  1 |  0 |
+| `_redux-slice` |   65 |       5 |  2 |  3 |
+| xstate       |    92 |      11 |  2 |  3 |
+| **triggery** |    **93** |       **9** |  **4** |  **3** |
+| naked        |    94 |       8 |  1 |  4 |
+| effector     |    94 |       7 |  2 |  3 |
+| reatom       |    94 |       9 |  2 |  3 |
+| rxjs         |   116 |       7 |  2 |  3 |
 
-Triggery 68 (7th of 9). The 4-trigger split + 4 dispatch tables + dock interaction discriminator concentrate branching. RTK / saga are lowest because their slice reducers compose by name (no `if (event.name === …)` chain). The cyclomatic counter favours "many small functions referenced from a slice" over "few large dispatch tables".
+The Redux trio look low because most logic is in the shared slice (cyclo 65, counted once). The combined-per-engine cyclomatic for redux-thunk is ≈ 101, redux-saga ≈ 97, rtk-listener ≈ 98 — putting them in the same band as the non-redux engines, not below them. Triggery's 93 is concentrated in the engine façade's per-method reducers; the trigger handler itself is trivial.
 
 ### Dependency footprint
 
@@ -226,86 +232,87 @@ Four axes per engine. 🟢 light · 🟡 medium · 🔴 heavy.
 | engine | concepts | spec ↔ code | debug tooling | onboarding | summary |
 |---|---|---|---|---|---|
 | naked | 🟢 0 | 🟡 closures + `setTimeout`; one growing file | 🟡 just `console.log` | 🟢 instant | 🟢 light |
-| **triggery** | 🟢 2 | 🟡 4 triggers + dispatch tables — readable but spread | 🟡 `@triggery/core/inspect` (basic) | 🟢 hours | 🟡 medium |
-| reatom | 🟢 3 | 🟡 single mutator action, ctx-bound | 🟡 reatom-devtools (basic) | 🟢 days | 🟢 light |
-| effector | 🟡 5 | 🟡 events + store-on chain | 🟢 effector-inspector + Redux DevTools bridge | 🟡 days | 🟡 medium |
+| **triggery** | 🟢 2 | 🟡 one trigger + `mutate(fn)` reducer per method | 🟡 `@triggery/core/inspect` (basic) | 🟢 hours | 🟢 light |
+| reatom | 🟢 3 | 🟡 single `mutate(fn)` action over one atom | 🟡 reatom-devtools (basic) | 🟢 days | 🟢 light |
+| effector | 🟡 25+ events | 🟡 events + store-on chain reads like a registry | 🟢 effector-inspector + Redux DevTools bridge | 🟡 days | 🟡 medium |
 | rtk-listener | 🟡 5 | 🟢 slice + listeners reads as a registry | 🟢 Redux DevTools + time travel | 🟢 hours | 🟡 medium |
-| redux-thunk | 🟡 5 | 🟢 slice + thunks reads as procedure | 🟢 Redux DevTools | 🟢 hours | 🟡 medium |
-| **xstate** | 🟡 6 | 🟢 statechart for drag/resize ↔ ideal | 🟢 Stately inspector + visualizer | 🔴 weeks | 🔴 heavy |
+| redux-thunk | 🟡 3 | 🟢 slice + 2 thunks; the engine is mostly a thin wrapper around `store.dispatch` | 🟢 Redux DevTools | 🟢 hours | 🟢 light |
+| **xstate** | 🟡 6 | 🟡 statechart enforces idle/interacting but most logic is in `assign` actions | 🟢 Stately inspector + visualizer | 🔴 weeks | 🔴 heavy |
 | redux-saga | 🟡 9 | 🟡 generators + effect vocabulary | 🟢 Redux DevTools + saga-monitor | 🟡 days | 🔴 heavy |
-| rxjs | 🔴 9 | 🟢 drag-as-stream is canonical | 🔴 deep operator stacks, no first-class inspector | 🔴 weeks | 🔴 heavy |
+| rxjs | 🔴 12 | 🟢 stream-of-actions + scan is idiomatic | 🔴 deep operator stacks, no first-class inspector | 🔴 weeks | 🔴 heavy |
 
 Honest caveats — what the table doesn't capture:
 
-- **XState's `throttle` is actually debounce here.** The idiomatic `cancel + raise + delay` pattern fires after silence, not during. For drag-during-pointer-stream you want leading-edge throttle. To do real throttle in XState you'd add a `cooldown` sub-state with an `after` transition — ≈ 15-25 more LOC and an extra state node per throttled stream. We left the simpler version in to show the cost honestly.
-- **RxJS's spec↔code is 🟢 here, unlike wizard-form** — the drag-as-stream (`pointerDown$ → switchMap(_ => pointerMove$.pipe(throttleTime, takeUntil(pointerUp$)))`) is the textbook pattern. We don't use the literal switchMap form (we reduce through a `Subject<Action>` instead for composition with non-drag actions), but the family is right.
-- **Triggery's 4-trigger split is structural overhead** in this scenario. It pays off for the *vocabulary* — `actions.throttle(16)` is a single declarative line, no timer handles, no race-ids — but the 4 setups push absolute LOC into the high range. In a scenario with **more orthogonal event sources** (say, 8 trigger concerns, not 4), the structural cost amortises better.
-- **Redux family's "spec ↔ code 🟢"** is honest for this scenario specifically — the slice's reducer cases line up 1:1 with R1-R14 mutations. The "imperative branches in thunks" critique from wizard-form is less applicable here because the workspace state is dominated by record-mutations, not transitions.
+- **The redux trio's reducers are short because the slice is shared.** If you compare engine-files only, redux-thunk wins LOC (168). If you include the slice it has to import (202), the total is ≈ 370 — same band as triggery, effector, rxjs.
+- **XState's `idle ↔ interacting` flat statechart** is honest about what we built — we did NOT model `drag-floating`, `resize-floating`, `divider-resize` as separate states (that would be 4 nested sub-states with mode-specific transitions, +60-80 LOC). The statechart wins in *enforcement* of "you can't start a resize during a drag", but per-mode dispatch lives in `assign` actions, same as a slice reducer.
+- **RxJS spec ↔ code 🟢** is honest for this scenario — `Subject<Action>` + `scan` + `throttleTime` is the textbook pattern. The 12-symbol API surface is the price.
+- **Triggery's `mutate(fn)` pattern** is the same shape as Reatom's. The difference is the trigger schema (which gives you action observability via `subscribeAction` and the `actions.throttle(16)` declarative one-liner). For this scenario the runtime-cost-per-event is the visible trade-off (slower drag throughput); the cheaper-than-redux bundle and 2-symbol API are the wins.
+- **Effector's 25 events** is the maximalist position — every input is its own event, the store is a registry of `.on(ev, reducer)` handlers. Reads like a database schema. But the symbol-count fight is between the **`createEvent` discipline** (effector) and the **`mutate(fn)` discipline** (triggery / reatom). Same complexity, different shape.
 
 <!-- END: measurements -->
 
 ## How to read these numbers
 
-Floating-workspace is the **stress test of the scenario set** — pointer streams + record state + keyboard routing + promise-returning modals all at once. Read the leaderboard like a balance sheet:
+Floating-workspace is the **stress test of the scenario set** — pointer streams + recursive tree state + per-panel mode flips + keyboard routing + promise-returning modals + persistent layout all at once. Read the leaderboard like a balance sheet:
 
-- **Redux-thunk wins LOC.** When the scenario reduces to "a slice + a couple of thunks", thunk is hard to beat. 206 LOC, predictable Redux DevTools. The cost shows up only in bundle (10.43 KB gz, 1.6× triggery) and the slowest perceived-latency p99 (33 µs).
-- **Reatom wins bundle.** 4.61 KB gz, 1 npm package, 3 concepts. It's the only library that comfortably matches naked baseline on weight while still giving you structure.
-- **RxJS wins drag-shape ergonomics + setBody latency.** The Subject + scan + throttleTime form is canonical and short (257 LOC). The 18-symbol API is the price.
-- **XState wins the drag-state-machine readability**, but loses on every quantifiable axis (longest LOC, second-largest bundle, slowest sustained drag throughput, highest cyclomatic). The trade-off honesty: if your team thinks in statecharts, the rest is bearable; if they don't, this scenario is the most expensive in the matrix.
-- **Triggery wins API surface (2 symbols), dependency footprint (1 package), and second-bundle (6.41 KB gz).** It loses LOC and cyclomatic to the slice-based engines because its 4-trigger split is structural overhead that this 20-rule app doesn't amortise. Its `actions.throttle(16).x?.(...)` and `actions.debounce(1000).x?.(...)` lines are individually the shortest in the matrix for "throttled action emit" and "debounced persist".
+- **Redux-thunk wins the per-engine-file LOC** but only because its slice is shared. Honest total: ≈ 370 LOC. Best in band when the side-effect surface is "throttle/debounce + a sync split-resolve on pointer-up" — thunk is the simplest of the three redux variants.
+- **Naked wins bundle, drag throughput, and setBody latency** — that's the floor every library has to beat. Reatom comes closest (6.71 KB gz, 4.7M ev/sec).
+- **Triggery wins API surface (2 symbols, tied with reatom)**, **bundle 3rd (8.23 KB gz)**, and **dependency footprint (1 package)**. It loses LOC because the engine surface (22 methods) is wide and each gets its own `mutate(s => …)` reducer. Per-event runtime cost (~3.7 µs) is the bottleneck for drag throughput but doesn't matter at 60 fps real-world.
+- **XState wins drag-state-machine readability** in theory — but our pragmatic version flattens to `idle ↔ interacting` because nested mode-specific states (drag-floating / resize-floating / divider-resize) would push LOC past 600. The throttle-vs-debounce caveat is real: real throttle in XState costs another state node.
+- **RxJS wins the drag-as-stream metaphor** with `Subject<Action>` + `scan`. 12 symbols + 19 KB gz is the cost. Best p50 latency (0.96 µs) of any library because the dispatch path is just a `Subject.next`.
 
 **Where Triggery makes sense over the alternatives for this kind of scenario:**
 
-1. You already use Triggery in the codebase and want one library for "events + side-effects" everywhere.
-2. You need the smallest npm-package count and smallest concept budget (2 symbols).
-3. Your scenario has more orthogonal event-source concerns (10+ buttons / shortcuts / streams) where the per-trigger split pays back in readability.
+1. You want one library that handles **both event dispatch and declarative throttle/debounce** without pulling middleware (`actions.throttle(16)` is a one-liner, no timer handles, no race-ids).
+2. You need the smallest concept budget (2 symbols) and the smallest npm-package count (1) among non-naked engines.
+3. Your team prefers state-as-closure + tree-of-reducers over slice-of-cases — `mutate((s) => …)` is the same pattern Reatom uses, with built-in action vocabulary.
 
 **Where Triggery isn't the right tool here:**
 
-- If your team already thinks in slices + middleware — `redux-thunk` is shorter for this exact shape (record state + side-effects on dispatch).
-- If your scenario is dominated by *one* canonical pointer-stream (drag, scroll, paint) and nothing else — rxjs's `pointerDown$ → switchMap → throttleTime → takeUntil` form is the shortest, most direct expression.
-- If your app is a fully-fledged state-machine product (multi-stage video player, complex onboarding chain) — xstate's statechart-as-spec wins despite the LOC cost.
+- If your team lives in Redux DevTools — `redux-thunk` is the same engine-shape with familiar tooling.
+- If your scenario is dominated by *one* canonical pointer-stream and nothing else — rxjs's `pointerDown$ → switchMap → throttleTime → takeUntil` is the canonical form.
+- If your app is a fully-fledged state-machine product (multi-stage onboarding, video player with formal modes) — xstate's statechart-as-spec wins despite the LOC cost.
 
 ## Per-engine notes
 
 ### `triggery`
 
-Four triggers, schedule `'sync'`:
-- `lifecycle` — open / close / focus / set-query / set-body / reset / load-layout
-- `pointer` — start-drag / start-resize / pointer-move / pointer-up (with `actions.throttle(16)` on the move emit)
-- `keyboard` — single `key` event routed through a closure flag back to the engine façade
-- `persist` — `changed` event from any of the above schedules `actions.debounce(1000).write(state)`; `flush` fires it immediately on pointer-up
+One trigger (`workspace`), two events:
+- `mutate` carries `{ fn: (s: WS) => WS }` — every engine method calls `runtime.fire('mutate', { fn })` with a reducer function.
+- `pointer-move` carries `{ px, py }` and is wrapped with `actions.throttle(POINTER_THROTTLE_MS)['apply-move']` — declarative 16 ms throttle, no `lastMoveTime` closure.
 
-Dispatch tables (built once per engine instance, not per event) replace per-event if/else chains. State lives in a closure; the four triggers all mutate it and emit a `snapshot` action that subscribers fan-out from. Modal openers (`alert` / `confirm` / `openCommandPalette`) return promises whose resolvers live in a factory-closure `Map<id, fn>`; `close(id, result)` looks them up.
+State lives in closure. The trigger handler fires two actions on every mutate: `snapshot` (for subscriber fan-out) and `actions.debounce(PERSIST_DEBOUNCE_MS).persist` (declarative debounce for localStorage). Modal openers (`alert` / `confirm` / `openCommandPalette`) return promises whose resolvers live in a factory-closure `Map<id, fn>`; `close(id, result)` looks them up. ≈ 280 LOC.
 
 ### `xstate`
 
-`idle`/`dragging`/`resizing` as top-level states; transitions enforce "you can't `START_RESIZE` while dragging". The `cancel('move-throttle') + raise({ type: 'APPLY_MOVE' }, { delay: 16, id })` pattern *looks* like throttle but is debounce-shaped (see honest caveat above). The actor's `submitActor` from wizard-form is replaced here with a closure-held `Map` for modal resolvers because xstate's setup-time actor schema can't see per-instance state — that's where `.provide({ actions })` comes in.
+Two top-level states: `idle` and `interacting`. The four interaction kinds (drag-floating / resize-floating / drag-tiled / divider-resize) are differentiated by `context.interaction.kind`, not by separate states — keeping the statechart small in exchange for less compile-time enforcement. Pointer-move uses `cancel('move') + raise({ type: 'APPLY_MOVE' }, { delay: 16, id: 'move' })` — debounce-shaped, see honest caveat. `pendingPointer` lives in context so the deferred `APPLY_MOVE` can read the latest x/y. ≈ 498 LOC.
 
 ### `effector`
 
-11 `createEvent`s + 1 `$workspace` store with 11 `.on()` handlers. Pointer-move throttle is hand-rolled in a closure (`lastMoveTime`). Persist debounce is `$workspace.updates.watch(scheduleSetTimeout)`. The framework's strength (effect graph) doesn't pay off here because there's no graph — it's a single store with 11 reducers.
+25 `createEvent`s + 1 `$workspace` store with 25 `.on()` handlers — the maximalist event-graph position. Pointer-move throttle is hand-rolled (`lastMoveTime`); persist debounce is `$workspace.updates.watch(scheduleSetTimeout)`. The framework's strength (effect graph + computed stores) doesn't actively help — there's no graph, it's a single store. ≈ 356 LOC.
 
 ### `rxjs`
 
-`Subject<Action>` upstream, `scan` reducer downstream, pointer-moves go through a parallel `throttleTime(16, { leading: true, trailing: true })` branch and merge back in. Persist is a `snapshot$.pipe(debounceTime(1000), tap(persistLayout))` side-effect stream. Cleanly composes — every concern is a stream that merges into the same shape.
+`Subject<Action>` upstream; pointer-moves go through a parallel `move$.pipe(throttleTime(16))` branch that emits `{ type: 'apply-move' }` actions, `merge`d back into the main stream. The whole graph is `scan<Action, WS>` reducer + `state$ = BehaviorSubject`. Persist is `state$.pipe(debounceTime(1000), distinctUntilChanged()).subscribe(persistLayout)`. Cleanest composition of streams; widest API surface (12 symbols). ≈ 386 LOC.
 
 ### `reatom`
 
-A single `workspaceAtom` plus one `mutate(ctx, fn)` action that takes a function `(s) => s'`. Throttle + debounce are hand-rolled in closure (`lastMoveTime` + `setTimeout`). The framework's structure (atom = unit of memoised computation) doesn't actively help here — you end up using it as a single Container Atom + a mutator function. That's fine, just minimal use of what reatom offers.
+A single `workspaceAtom` + one `mutate` action that accepts a function `(s) => s'`. Same shape as Triggery's `mutate(fn)`. Hand-rolled throttle + debounce timers — Reatom's primitive surface stops at atoms/actions. Lowest LOC of all non-redux engines (338) because the action vocabulary is exactly one. ≈ 338 LOC.
 
 ### `rtk-listener`
 
-One slice with 12 reducer cases + 2 listeners (`pointerMoveAction` → cancel + delay + applyMove; `persistTrigger` → cancel + delay + persistLayout). The `cancelActiveListeners() + delay(16)` pattern is debounce-shaped like xstate's, but a single dispatch reaches `applyMove` before the next cancel — so the snapshot count is still 2 (out of 1000) in our bench. Loses on perf (71k ev/sec) because every event goes through the listener middleware stack.
+Shared slice (202 LOC) + listenerMiddleware with three listeners (pointer-move throttle, pointer-up split-resolve, persist debounce). `cancelActiveListeners() + delay(16)` is debounce-shaped — gets the right result for our drag because the *next* pointer-move cancels the previous, but every action still notifies subscribers. ≈ 172 LOC engine + 202 LOC slice.
 
 ### `redux-thunk`
 
-Same slice + 2 thunks (`schedulePersist`, `flushPersistNow`). Pointer-move throttle is `lastMoveTime` check before dispatching `applyMove`. **Best LOC in the matrix at 206**, mostly because the slice carries the bulk of the logic and there's no listener / saga / actor machinery on top.
+Same slice + 2 thunks (`pointerMoveThunk` reads store state to bail on null interaction, `pointerUpThunk` resolves drag-tiled splits). Hand-rolled `lastMoveTime` throttle + `setTimeout` debounce. **Smallest engine file in the matrix (168 LOC)** thanks to the shared slice carrying the bulk of the logic. ≈ 168 LOC engine + 202 LOC slice.
 
 ### `redux-saga`
 
-`throttle(16, pointerMoveAction.type, moveSaga)` + `debounce(1000, mutationOccurred.type, persistSaga)` + `takeEvery(pointerUpAction.type, pointerUpSaga)`. The cleanest one-line throttle/debounce in the matrix at the language level — but 16.46 KB gz, 12 npm packages, and 722k ev/sec drag throughput is the bottom of the non-RTK-listener stack.
+Same slice + 3 sagas: `throttle(16, pointerMoveRequested, applyMoveSaga)` (real throttle as an effect), `takeEvery(pointerUpRequested, pointerUpSaga)` (split-resolve), `debounce(1000, persistRequested, persistSaga)` (real debounce). The cleanest one-line throttle/debounce expression in the matrix. Trade-off: 12 npm packages, 18.67 KB gz, generators in the call stack. ≈ 169 LOC engine + 202 LOC slice.
+
+⚠ Implementation note: the saga engine intentionally dispatches `persistRequested` only when `store.getState()` actually changed between subscriber fires — without that guard the action would loop infinitely through `store.subscribe`.
 
 ### `naked`
 
-Plain JS — mutable `state` object, Set of subscribers, `lastMoveTime` + `setTimeout` for throttle/debounce. 271 LOC and the **fastest** dispatch path of any engine (11.4M ev/sec for the inner loop) because there's literally no library between `setBody(id, body)` and `state.panels[id].body = body`. The dispatch path doesn't help the *perceived* feel of the UI — drag is throttled to 60 fps anyway.
+Plain JS — mutable `state` object, Set of subscribers, `lastMoveTime` + `setTimeout` for throttle/debounce. The reference impl other engines mirror; **507 LOC** because there's no library hiding any of the tree-manipulation, snap, or arrange code. **Fastest** dispatch path (7.8M ev/sec for the inner loop). Smallest bundle (4.21 KB gz).

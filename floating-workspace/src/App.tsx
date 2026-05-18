@@ -1,8 +1,20 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { Engine } from './engine';
 import { ENGINE_LIST, resolveEngineId } from './registry';
-import { COMMAND_PALETTE_COMMANDS, filterCommands } from './scenario';
-import type { DockAnchor, FloatingPanel, ModalSpec, WorkspaceSnapshot } from './types';
+import {
+  COMMAND_PALETTE_COMMANDS,
+  INSPECTOR_MODE_LABELS,
+  classifyDropZone,
+  filterCommands,
+  flattenPanelIds,
+} from './scenario';
+import type {
+  InspectorMode,
+  ModalSpec,
+  Panel,
+  TileNode,
+  WorkspaceSnapshot,
+} from './types';
 import './styles.css';
 
 export function App() {
@@ -15,31 +27,41 @@ export function App() {
   useEffect(() => () => engine.dispose(), [engine]);
   useEffect(() => engine.loadLayout(), [engine]);
 
-  // Command palette: when user picks a command, dispatch it via the engine.
-  const runCommand = useMemo(() => {
-    return (cmdId: string) => {
-      const s = engine.snapshot();
-      const focused = s.focused;
-      if (cmdId === 'open:note') engine.openPanel('note');
-      else if (cmdId === 'open:inspector') engine.openPanel('inspector');
-      else if (cmdId === 'close:focused' && focused) engine.close(focused);
-      else if (cmdId === 'dock:focused:left' && focused) engine.dock(focused, 'left');
-      else if (cmdId === 'dock:focused:right' && focused) engine.dock(focused, 'right');
-      else if (cmdId === 'dock:focused:bottom' && focused) engine.dock(focused, 'bottom');
-      else if (cmdId === 'undock:focused' && focused) engine.undock(focused);
-      else if (cmdId === 'workspace:reset') engine.reset();
-    };
+  // Command palette dispatcher — UI maps command ids to engine calls.
+  const runCommand = useCallback((cmdId: string) => {
+    const s = engine.snapshot();
+    const focused = s.focused;
+    switch (cmdId) {
+      case 'open:note': engine.openPanel('note'); break;
+      case 'open:inspector': engine.openPanel('inspector'); break;
+      case 'mode:float-focused': if (focused) engine.setPanelMode(focused, 'floating'); break;
+      case 'mode:tile-focused': if (focused) engine.setPanelMode(focused, 'tiled'); break;
+      case 'mode:float-all': engine.setAllPanelsMode('floating'); break;
+      case 'mode:tile-all': engine.setAllPanelsMode('tiled'); break;
+      case 'arrange:cascade-floating': engine.arrangeCascadeFloating(); break;
+      case 'arrange:mosaic-tiled': engine.arrangeMosaicTiled(); break;
+      case 'arrange:rows': engine.arrangeRows(); break;
+      case 'arrange:cols': engine.arrangeColumns(); break;
+      case 'arrange:equalize': engine.arrangeEqualizeTiles(); break;
+      case 'inspector:cursor':
+      case 'inspector:state':
+      case 'inspector:tree':
+      case 'inspector:static': {
+        const mode = cmdId.split(':')[1] as InspectorMode;
+        if (focused && s.panels[focused]?.kind === 'inspector') engine.setInspectorMode(focused, mode);
+        break;
+      }
+      case 'close:focused': if (focused) engine.close(focused); break;
+      case 'workspace:reset': engine.reset(); break;
+    }
   }, [engine]);
-  const openPalette = useMemo(() => {
-    return async () => {
-      const cmdId = await engine.openCommandPalette(COMMAND_PALETTE_COMMANDS);
-      if (cmdId) runCommand(cmdId);
-    };
+
+  const openPalette = useCallback(async () => {
+    const cmdId = await engine.openCommandPalette(COMMAND_PALETTE_COMMANDS);
+    if (cmdId) runCommand(cmdId);
   }, [engine, runCommand]);
 
-  // Global keyboard handler. We intercept ⌘K / Ctrl+K ourselves so the
-  // command palette result actually runs through `runCommand`. Everything
-  // else (ESC / ⌘W) is engine business.
+  // Global keyboard
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
@@ -48,17 +70,22 @@ export function App() {
         openPalette();
         return;
       }
-      if (engine.onKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey })) {
-        e.preventDefault();
-      }
+      if (engine.onKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey })) e.preventDefault();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [engine, openPalette]);
 
-  // Global pointermove / pointerup (drag continues outside the window frame)
+  // Global pointer + cursor tracking
   useEffect(() => {
-    const move = (e: PointerEvent) => engine.pointerMove(e.clientX, e.clientY);
+    const move = (e: PointerEvent) => {
+      engine.pointerMove(e.clientX, e.clientY);
+      // Cursor tracking — find topmost panel-bearing element under pointer.
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const carrier = el?.closest('[data-panel-id]') as HTMLElement | null;
+      const overId = carrier?.dataset.panelId ?? null;
+      engine.setCursor(e.clientX, e.clientY, overId);
+    };
     const up = () => engine.pointerUp();
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -77,209 +104,295 @@ export function App() {
   );
 
   const interactionKind = snap.interaction?.kind;
-  const wsClass = `workspace ${interactionKind ? `is-${interactionKind === 'drag' ? 'dragging' : 'resizing'}` : ''}`;
+  const wsClass = `workspace ${
+    interactionKind === 'drag-floating' ? 'is-dragging'
+    : interactionKind === 'resize-floating' ? 'is-resizing'
+    : interactionKind === 'divider-resize' ? 'is-resizing'
+    : interactionKind === 'drag-tiled' ? 'is-tile-drag'
+    : ''
+  }`;
   const topModal = snap.modals[snap.modals.length - 1];
-
-  // Find which panel is in each dock slot.
-  const allPanels = Object.values(snap.panels);
-  const dockLeft = allPanels.find((p) => p.dock === 'left');
-  const dockRight = allPanels.find((p) => p.dock === 'right');
-  const dockBottom = allPanels.find((p) => p.dock === 'bottom');
-
-  const gridStyle = {
-    '--dock-left-w': dockLeft ? `${snap.dockSizes.left}px` : '0px',
-    '--dock-right-w': dockRight ? `${snap.dockSizes.right}px` : '0px',
-    '--dock-bottom-h': dockBottom ? `${snap.dockSizes.bottom}px` : '0px',
-  } as React.CSSProperties;
+  const hasAnyPanel = Object.keys(snap.panels).length > 0;
 
   return (
     <>
-      <EngineBar engine={engine} currentId={engineId} snap={snap} />
-      <div className={wsClass} style={gridStyle}>
-        {dockLeft && (
-          <DockSlot anchor="left" panel={dockLeft} focused={snap.focused === dockLeft.id} engine={engine} />
-        )}
-        <div className="main-area">
-          <HeroBar engine={engine} hasPanels={snap.zOrder.length > 0} openPalette={openPalette} />
-          {snap.zOrder.map((id, i) => {
+      <TopBar engine={engine} currentId={engineId} snap={snap} openPalette={openPalette} />
+      <div className={wsClass}>
+        <div className="main-area" data-main-area>
+          {!hasAnyPanel && <HeroEmpty />}
+          {snap.tree && <TreeView node={snap.tree} engine={engine} snap={snap} />}
+          {/* Floating panels overlaid on top of tree */}
+          {snap.floatingZOrder.map((id, i) => {
             const p = snap.panels[id];
-            if (!p || p.dock !== null) return null;
+            if (!p || p.mode !== 'floating') return null;
             return (
-              <Panel
+              <FloatingPanel
                 key={p.id}
                 panel={p}
                 focused={snap.focused === p.id}
-                z={i + 10}
+                z={50 + i}
                 engine={engine}
+                snap={snap}
               />
             );
           })}
         </div>
-        {dockRight && (
-          <DockSlot anchor="right" panel={dockRight} focused={snap.focused === dockRight.id} engine={engine} />
-        )}
-        {dockBottom && (
-          <DockSlot anchor="bottom" panel={dockBottom} focused={snap.focused === dockBottom.id} engine={engine} />
-        )}
       </div>
       {topModal && <ModalLayer engine={engine} modal={topModal} />}
     </>
   );
 }
 
-function DockSlot({
-  anchor, panel, focused, engine,
-}: { anchor: DockAnchor; panel: FloatingPanel; focused: boolean; engine: Engine }) {
-  const handleResize = (e: React.PointerEvent) => {
+function TopBar({
+  engine, currentId, snap, openPalette,
+}: { engine: Engine; currentId: string; snap: WorkspaceSnapshot; openPalette: () => void }) {
+  const panelCount = Object.keys(snap.panels).length;
+  return (
+    <div className="top-bar">
+      <div className="top-bar-section">
+        <span className="brand">Floating workspace</span>
+        <span className="brand-sub">{panelCount}/8</span>
+      </div>
+      <div className="top-bar-section primary">
+        <button className="action-btn primary" onClick={() => engine.openPanel('note')}>
+          <span>📝</span> Note
+        </button>
+        <button className="action-btn" onClick={() => engine.openPanel('inspector')}>
+          <span>🔍</span> Inspector
+        </button>
+        <button className="action-btn" onClick={openPalette}>
+          <span>⌘K</span> Commands
+        </button>
+      </div>
+      <div className="top-bar-section engines">
+        {ENGINE_LIST.map((e) => (
+          <a
+            key={e.meta.id}
+            href={`?engine=${e.meta.id}`}
+            className={e.meta.id === currentId ? 'active' : ''}
+            title={e.meta.description}
+          >
+            {e.meta.label}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HeroEmpty() {
+  return (
+    <div className="hero-empty">
+      <p>
+        Click <kbd>Note</kbd> or <kbd>Inspector</kbd> above to open a panel.<br />
+        Hit <kbd>⌘K</kbd> for commands · drag tiles to split · use <kbd>↗</kbd> in a panel header to float.
+      </p>
+    </div>
+  );
+}
+
+// ─── Tree rendering ──────────────────────────────────────────────────────
+
+function TreeView({
+  node, engine, snap,
+}: { node: TileNode; engine: Engine; snap: WorkspaceSnapshot }) {
+  if (node.kind === 'leaf') {
+    const panel = snap.panels[node.panelId];
+    if (!panel || panel.mode !== 'tiled') return null;
+    return (
+      <TiledLeaf
+        leafId={node.id}
+        panel={panel}
+        focused={snap.focused === panel.id}
+        engine={engine}
+        snap={snap}
+      />
+    );
+  }
+  return (
+    <Container container={node} engine={engine} snap={snap} />
+  );
+}
+
+function Container({
+  container, engine, snap,
+}: { container: Extract<TileNode, { kind: 'container' }>; engine: Engine; snap: WorkspaceSnapshot }) {
+  const ref = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={ref} className={`tile-container dir-${container.dir}`}>
+      {container.children.map((child, i) => (
+        <div
+          key={child.id}
+          className="tile-slot"
+          style={{ flexBasis: `${container.sizes[i]}%` }}
+        >
+          <TreeView node={child} engine={engine} snap={snap} />
+          {i < container.children.length - 1 && (
+            <DividerHandle
+              container={container}
+              dividerIdx={i}
+              outerRef={ref}
+              engine={engine}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DividerHandle({
+  container, dividerIdx, outerRef, engine,
+}: {
+  container: Extract<TileNode, { kind: 'container' }>;
+  dividerIdx: number;
+  outerRef: React.RefObject<HTMLDivElement | null>;
+  engine: Engine;
+}) {
+  const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    engine.startDockResize(anchor, e.clientX, e.clientY);
+    const containerEl = outerRef.current;
+    const length = containerEl
+      ? container.dir === 'row' ? containerEl.clientWidth : containerEl.clientHeight
+      : 1000;
+    engine.startDividerResize(container.id, dividerIdx, e.clientX, e.clientY, length);
+  };
+  return <div className={`divider divider-${container.dir}`} onPointerDown={onPointerDown} />;
+}
+
+function TiledLeaf({
+  leafId, panel, focused, engine, snap,
+}: { leafId: string; panel: Panel; focused: boolean; engine: Engine; snap: WorkspaceSnapshot }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const isDragging = snap.interaction?.kind === 'drag-tiled' && snap.interaction.id === panel.id;
+  const isDropTarget =
+    snap.interaction?.kind === 'drag-tiled'
+    && snap.interaction.targetLeafId === leafId
+    && snap.interaction.id !== panel.id;
+  const dropZone =
+    isDropTarget && snap.interaction?.kind === 'drag-tiled'
+      ? snap.interaction.targetZone
+      : null;
+  // While dragging, when pointer is over this leaf, classify zone and inform engine.
+  const onPointerOver = (e: React.PointerEvent) => {
+    const inter = snap.interaction;
+    if (inter?.kind !== 'drag-tiled' || inter.id === panel.id) return;
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const zone = classifyDropZone(e.clientX, e.clientY, rect);
+    engine.setTileDropTarget(leafId, zone);
+  };
+  const onPointerOut = () => {
+    const inter = snap.interaction;
+    if (inter?.kind !== 'drag-tiled' || inter.id === panel.id) return;
+    engine.setTileDropTarget(null, null);
   };
   return (
     <div
-      className={`dock dock-${anchor} ${focused ? 'is-focused' : ''} kind-${panel.kind}`}
+      ref={ref}
+      data-panel-id={panel.id}
+      className={`tile-leaf kind-${panel.kind} ${focused ? 'is-focused' : ''} ${isDragging ? 'is-dragging' : ''}`}
       onPointerDown={() => engine.focus(panel.id)}
+      onPointerOver={onPointerOver}
+      onPointerOut={onPointerOut}
     >
-      <PanelHeader panel={panel} focused={focused} engine={engine} dragEnabled={false} />
-      <div className="body">
-        {panel.kind === 'note' ? (
-          <textarea
-            value={panel.body}
-            onChange={(e) => engine.setBody(panel.id, e.target.value)}
-            placeholder="Start typing…"
-          />
-        ) : (
-          <InspectorView body={panel.body} />
-        )}
-      </div>
-      <div className={`dock-divider dock-divider-${anchor}`} onPointerDown={handleResize} />
+      <PanelHeader
+        panel={panel}
+        engine={engine}
+        onTitleBarPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          engine.startTileDrag(panel.id, e.clientX, e.clientY);
+        }}
+      />
+      <PanelBody panel={panel} engine={engine} snap={snap} />
+      {dropZone && <DropZoneOverlay zone={dropZone} />}
     </div>
   );
 }
 
-function EngineBar({
-  engine: _engine, currentId, snap,
-}: { engine: Engine; currentId: string; snap: WorkspaceSnapshot }) {
-  void _engine;
-  const panelCount = Object.keys(snap.panels).length;
-  return (
-    <div className="engine-bar">
-      <span className="label">Floating workspace · engine:</span>
-      {ENGINE_LIST.map((e) => (
-        <a
-          key={e.meta.id}
-          href={`?engine=${e.meta.id}`}
-          className={e.meta.id === currentId ? 'active' : ''}
-          title={e.meta.description}
-        >
-          {e.meta.label}
-        </a>
-      ))}
-      <span className="hint">{panelCount}/5 panels · <kbd>⌘W</kbd> close · <kbd>Esc</kbd> dismiss · drag title · drag bottom-right</span>
-    </div>
-  );
+function DropZoneOverlay({ zone }: { zone: 'top' | 'right' | 'bottom' | 'left' | 'center' }) {
+  return <div className={`drop-zone drop-zone-${zone}`} />;
 }
 
-function HeroBar({
-  engine, hasPanels, openPalette,
-}: { engine: Engine; hasPanels: boolean; openPalette: () => void }) {
-  return (
-    <div className={`hero-bar ${hasPanels ? 'is-compact' : 'is-empty'}`}>
-      {!hasPanels && (
-        <p className="hero-tagline">
-          Open windows, drag them around, resize from the corner.<br />
-          Dock to <kbd>⇤</kbd> <kbd>⇩</kbd> <kbd>⇥</kbd> from the title bar.
-          Hit <kbd>⌘K</kbd> for the command palette.
-        </p>
-      )}
-      <div className="hero-actions">
-        <button className="hero-btn primary" onClick={() => engine.openPanel('note')}>
-          <span className="hero-btn-glyph">📝</span>
-          <span>New note<small>editable text</small></span>
-        </button>
-        <button className="hero-btn" onClick={() => engine.openPanel('inspector')}>
-          <span className="hero-btn-glyph">🔍</span>
-          <span>New inspector<small>structured info</small></span>
-        </button>
-        <button className="hero-btn" onClick={openPalette}>
-          <span className="hero-btn-glyph">⌘K</span>
-          <span>Command palette<small>run any command</small></span>
-        </button>
-      </div>
-    </div>
-  );
-}
+// ─── Floating panel ──────────────────────────────────────────────────────
 
-function Panel({
-  panel, focused, z, engine,
-}: { panel: FloatingPanel; focused: boolean; z: number; engine: Engine }) {
-  const handleResizePointer = (e: React.PointerEvent) => {
+function FloatingPanel({
+  panel, focused, z, engine, snap,
+}: { panel: Panel; focused: boolean; z: number; engine: Engine; snap: WorkspaceSnapshot }) {
+  const onTitleBarPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
+    engine.startFloatingDrag(panel.id, e.clientX, e.clientY);
+  };
+  const onResizePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    engine.startResize(panel.id, e.clientX, e.clientY);
+    engine.startFloatingResize(panel.id, e.clientX, e.clientY);
   };
   return (
     <div
-      className={`panel kind-${panel.kind} ${focused ? 'is-focused' : ''}`}
+      data-panel-id={panel.id}
+      className={`floating-panel kind-${panel.kind} ${focused ? 'is-focused' : ''}`}
       style={{
         left: panel.x, top: panel.y, width: panel.w, height: panel.h, zIndex: z,
       }}
       onPointerDown={() => engine.focus(panel.id)}
     >
-      <PanelHeader panel={panel} focused={focused} engine={engine} dragEnabled />
-      <div className="body">
-        {panel.kind === 'note' ? (
-          <textarea
-            value={panel.body}
-            onChange={(e) => engine.setBody(panel.id, e.target.value)}
-            placeholder="Start typing…"
-          />
-        ) : (
-          <InspectorView body={panel.body} />
-        )}
-      </div>
-      <div className="resize-handle" onPointerDown={handleResizePointer} />
+      <PanelHeader panel={panel} engine={engine} onTitleBarPointerDown={onTitleBarPointerDown} draggable />
+      <PanelBody panel={panel} engine={engine} snap={snap} />
+      <div className="resize-handle" onPointerDown={onResizePointerDown} />
     </div>
   );
 }
 
+// ─── Panel header & body (shared between tiled + floating) ──────────────
+
 function PanelHeader({
-  panel, focused, engine, dragEnabled,
-}: { panel: FloatingPanel; focused: boolean; engine: Engine; dragEnabled: boolean }) {
-  void focused;
-  const handleTitlePointer = (e: React.PointerEvent) => {
-    if (!dragEnabled || e.button !== 0) return;
-    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
-    e.preventDefault();
-    engine.startDrag(panel.id, e.clientX, e.clientY);
+  panel, engine, onTitleBarPointerDown, draggable,
+}: {
+  panel: Panel;
+  engine: Engine;
+  onTitleBarPointerDown: (e: React.PointerEvent) => void;
+  draggable?: boolean;
+}) {
+  const toggleMode = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    engine.setPanelMode(panel.id, panel.mode === 'tiled' ? 'floating' : 'tiled');
   };
-  const docked = panel.dock !== null;
   return (
     <div
-      className={`title-bar ${dragEnabled ? '' : 'no-drag'}`}
-      onPointerDown={handleTitlePointer}
+      className={`title-bar ${draggable ? 'draggable' : ''}`}
+      onPointerDown={onTitleBarPointerDown}
     >
       <span className="kind-chip">{panel.kind}</span>
       <span className="title">{panel.title}</span>
-      <div className="dock-buttons" onPointerDown={(e) => e.stopPropagation()}>
-        {docked ? (
-          <button className="dock-btn" title="Float" onClick={() => engine.undock(panel.id)}>↗</button>
-        ) : (
-          <>
-            <button className="dock-btn" title="Dock left" onClick={() => engine.dock(panel.id, 'left')}>⇤</button>
-            <button className="dock-btn" title="Dock bottom" onClick={() => engine.dock(panel.id, 'bottom')}>⇩</button>
-            <button className="dock-btn" title="Dock right" onClick={() => engine.dock(panel.id, 'right')}>⇥</button>
-          </>
-        )}
-      </div>
+      {panel.kind === 'inspector' && panel.mode === 'tiled' && (
+        // Inline inspector-mode mini selector
+        <InspectorModePicker
+          current={panel.inspectorMode ?? 'static'}
+          onChange={(m) => engine.setInspectorMode(panel.id, m)}
+        />
+      )}
       <button
-        className="close"
-        aria-label="Close"
+        className="header-btn mode-btn"
+        title={panel.mode === 'tiled' ? 'Float (detach from tile)' : 'Tile (snap back)'}
+        onClick={toggleMode}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        {panel.mode === 'tiled' ? '↗' : '⇲'}
+      </button>
+      <button
+        className="header-btn close"
+        title="Close"
         onClick={(e) => {
           e.stopPropagation();
           engine.close(panel.id);
         }}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         ×
       </button>
@@ -287,43 +400,129 @@ function PanelHeader({
   );
 }
 
-function InspectorView({ body }: { body: string }) {
-  // Inspector body is JSON; render as a key/value property list.
-  // Falls back to raw text if it doesn't parse (e.g. user edited via DevTools).
+function InspectorModePicker({
+  current, onChange,
+}: { current: InspectorMode; onChange: (m: InspectorMode) => void }) {
+  const modes: InspectorMode[] = ['static', 'state', 'cursor', 'tree'];
+  return (
+    <div className="inspector-mode-picker" onPointerDown={(e) => e.stopPropagation()}>
+      {modes.map((m) => (
+        <button
+          key={m}
+          className={`mode-pill ${current === m ? 'active' : ''}`}
+          onClick={(e) => { e.stopPropagation(); onChange(m); }}
+        >
+          {INSPECTOR_MODE_LABELS[m]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PanelBody({ panel, engine, snap }: { panel: Panel; engine: Engine; snap: WorkspaceSnapshot }) {
+  return (
+    <div className="body">
+      {panel.kind === 'note' ? (
+        <textarea
+          value={panel.body}
+          onChange={(e) => engine.setBody(panel.id, e.target.value)}
+          placeholder="Start typing…"
+        />
+      ) : (
+        <InspectorView panel={panel} snap={snap} />
+      )}
+    </div>
+  );
+}
+
+function InspectorView({ panel, snap }: { panel: Panel; snap: WorkspaceSnapshot }) {
+  const mode = panel.inspectorMode ?? 'static';
+  if (mode === 'cursor') return <CursorInspector snap={snap} />;
+  if (mode === 'state') return <StateInspector snap={snap} />;
+  if (mode === 'tree') return <TreeInspector snap={snap} />;
+  // static
   let data: Record<string, unknown> | null = null;
-  try {
-    data = JSON.parse(body) as Record<string, unknown>;
-  } catch {
-    // ignore
-  }
-  if (!data || typeof data !== 'object') {
-    return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', font: 'inherit' }}>{body}</pre>;
-  }
+  try { data = JSON.parse(panel.body) as Record<string, unknown>; } catch { /* ignore */ }
+  if (!data) return <pre className="static-fallback">{panel.body}</pre>;
+  return <PropertyList data={data} />;
+}
+
+function PropertyList({ data }: { data: Record<string, unknown> }) {
   return (
     <dl className="inspector">
       {Object.entries(data).map(([k, v]) => (
         <div className="row" key={k}>
           <dt>{k}</dt>
-          <dd>
-            {typeof v === 'boolean' ? (
-              <span className={`pill ${v ? 'ok' : 'off'}`}>{v ? 'true' : 'false'}</span>
-            ) : Array.isArray(v) ? (
-              <div className="tags">
-                {v.map((tag, i) => (
-                  <span className="tag" key={i}>{String(tag)}</span>
-                ))}
-              </div>
-            ) : v !== null && typeof v === 'object' ? (
-              <code>{JSON.stringify(v)}</code>
-            ) : (
-              <span>{String(v)}</span>
-            )}
-          </dd>
+          <dd>{renderValue(v)}</dd>
         </div>
       ))}
     </dl>
   );
 }
+
+function renderValue(v: unknown): React.ReactNode {
+  if (typeof v === 'boolean') return <span className={`pill ${v ? 'ok' : 'off'}`}>{v ? 'true' : 'false'}</span>;
+  if (Array.isArray(v))
+    return (
+      <div className="tags">
+        {v.map((t, i) => <span className="tag" key={i}>{String(t)}</span>)}
+      </div>
+    );
+  if (v !== null && typeof v === 'object') return <code>{JSON.stringify(v)}</code>;
+  if (v === null) return <span style={{ color: '#717280' }}>null</span>;
+  return <span>{String(v)}</span>;
+}
+
+function CursorInspector({ snap }: { snap: WorkspaceSnapshot }) {
+  const c = snap.cursor;
+  const overPanel = c.overPanelId ? snap.panels[c.overPanelId] : null;
+  return (
+    <PropertyList
+      data={{
+        'cursor.x': c.x,
+        'cursor.y': c.y,
+        over: overPanel ? `${overPanel.kind}: ${overPanel.title}` : '— none —',
+        'over.id': c.overPanelId ?? '—',
+      }}
+    />
+  );
+}
+
+function StateInspector({ snap }: { snap: WorkspaceSnapshot }) {
+  const focusedPanel = snap.focused ? snap.panels[snap.focused] : null;
+  return (
+    <PropertyList
+      data={{
+        'panels.total': Object.keys(snap.panels).length,
+        'panels.tiled': flattenPanelIds(snap.tree).length,
+        'panels.floating': snap.floatingZOrder.length,
+        focused: focusedPanel ? `${focusedPanel.kind}: ${focusedPanel.title}` : '— none —',
+        'focused.mode': focusedPanel?.mode ?? '—',
+        interaction: snap.interaction ? snap.interaction.kind : 'idle',
+        'modals.depth': snap.modals.length,
+      }}
+    />
+  );
+}
+
+function TreeInspector({ snap }: { snap: WorkspaceSnapshot }) {
+  if (!snap.tree) return <p className="static-fallback">— empty tree —</p>;
+  return <pre className="tree-render">{renderTreeAscii(snap.tree, snap, 0)}</pre>;
+}
+
+function renderTreeAscii(node: TileNode, snap: WorkspaceSnapshot, depth: number): string {
+  const pad = '  '.repeat(depth);
+  if (node.kind === 'leaf') {
+    const p = snap.panels[node.panelId];
+    return `${pad}● ${p ? `${p.kind}: ${p.title}` : node.panelId}`;
+  }
+  const sizes = node.sizes.map((s) => `${Math.round(s)}%`).join(' / ');
+  const head = `${pad}┌─ ${node.dir.toUpperCase()} [${sizes}]`;
+  const childLines = node.children.map((c) => renderTreeAscii(c, snap, depth + 1));
+  return [head, ...childLines].join('\n');
+}
+
+// ─── Modals ──────────────────────────────────────────────────────────────
 
 function ModalLayer({ engine, modal }: { engine: Engine; modal: ModalSpec }) {
   const dismiss = (result?: unknown) => engine.close(modal.id, result);
@@ -331,7 +530,8 @@ function ModalLayer({ engine, modal }: { engine: Engine; modal: ModalSpec }) {
     <div
       className="modal-backdrop"
       onPointerDown={(e) => {
-        if (e.target === e.currentTarget) dismiss(modal.kind === 'confirm' ? false : modal.kind === 'command-palette' ? null : undefined);
+        if (e.target === e.currentTarget)
+          dismiss(modal.kind === 'confirm' ? false : modal.kind === 'command-palette' ? null : undefined);
       }}
     >
       {modal.kind === 'alert' && (
@@ -339,9 +539,7 @@ function ModalLayer({ engine, modal }: { engine: Engine; modal: ModalSpec }) {
           <h2>{modal.title}</h2>
           <p>{modal.body}</p>
           <div className="actions">
-            <button className="primary" onClick={() => dismiss()} autoFocus>
-              OK
-            </button>
+            <button className="primary" onClick={() => dismiss()} autoFocus>OK</button>
           </div>
         </div>
       )}
@@ -351,25 +549,18 @@ function ModalLayer({ engine, modal }: { engine: Engine; modal: ModalSpec }) {
           <p>{modal.body}</p>
           <div className="actions">
             <button onClick={() => dismiss(false)}>Cancel</button>
-            <button className="primary" onClick={() => dismiss(true)} autoFocus>
-              OK
-            </button>
+            <button className="primary" onClick={() => dismiss(true)} autoFocus>OK</button>
           </div>
         </div>
       )}
-      {modal.kind === 'command-palette' && (
-        <CommandPalette engine={engine} modal={modal} />
-      )}
+      {modal.kind === 'command-palette' && <CommandPalette engine={engine} modal={modal} />}
     </div>
   );
 }
 
 function CommandPalette({
   engine, modal,
-}: {
-  engine: Engine;
-  modal: Extract<ModalSpec, { kind: 'command-palette' }>;
-}) {
+}: { engine: Engine; modal: Extract<ModalSpec, { kind: 'command-palette' }> }) {
   const filtered = filterCommands(modal.commands, modal.query);
   const top = filtered[0];
   return (
@@ -379,9 +570,7 @@ function CommandPalette({
         value={modal.query}
         onChange={(e) => engine.setQuery(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && top) {
-            engine.close(modal.id, top.id);
-          }
+          if (e.key === 'Enter' && top) engine.close(modal.id, top.id);
         }}
         placeholder="Type a command…"
       />
@@ -393,10 +582,7 @@ function CommandPalette({
             <li
               key={c.id}
               className={i === 0 ? 'is-active' : ''}
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                engine.close(modal.id, c.id);
-              }}
+              onPointerDown={(e) => { e.stopPropagation(); engine.close(modal.id, c.id); }}
             >
               <span className={`label ${c.hint === 'destructive' ? 'destructive' : ''}`}>{c.label}</span>
               {c.hint && <span className="hint">{c.hint}</span>}

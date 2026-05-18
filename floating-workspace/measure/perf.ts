@@ -38,11 +38,11 @@ function median(xs: number[]): number {
 
 async function benchDrag(factory: EngineFactory): Promise<{ eventsPerSec: number; snapshots: number }> {
   const engine = factory.create();
-  const id = engine.openPanel('note');
+  const id = engine.openPanel('note', { mode: 'floating' });
   if (!id) throw new Error('openPanel failed');
   let snapshots = 0;
   engine.subscribe(() => { snapshots += 1; });
-  engine.startDrag(id, 100, 100);
+  engine.startFloatingDrag(id, 100, 100);
   const start = performance.now();
   for (let i = 0; i < DRAG_N; i++) {
     engine.pointerMove(100 + (i % 200), 100 + (i % 200));

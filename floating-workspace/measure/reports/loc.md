@@ -1,11 +1,12 @@
 | engine | LOC | bytes |
 |---|---:|---:|
-| redux-thunk  |  253 | 11591 |
-| rtk-listener |  259 | 11865 |
-| redux-saga   |  264 | 11957 |
-| reatom       |  266 | 11190 |
-| effector     |  270 | 12258 |
-| rxjs         |  309 | 13788 |
-| naked        |  330 | 12035 |
-| triggery     |  391 | 15944 |
-| xstate       |  424 | 18739 |
+| redux-thunk  |  168 |  8126 |
+| redux-saga   |  169 |  8347 |
+| rtk-listener |  172 |  8575 |
+| _redux-slice |  202 | 10316 |
+| reatom       |  338 | 14937 |
+| triggery     |  344 | 15712 |
+| effector     |  356 | 18741 |
+| rxjs         |  386 | 19398 |
+| xstate       |  498 | 22771 |
+| naked        |  507 | 17684 |

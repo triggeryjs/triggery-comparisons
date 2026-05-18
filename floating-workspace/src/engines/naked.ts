@@ -1,36 +1,42 @@
 // Naked baseline — plain JS. Mutable state, Set of subscribers, manual
-// timers for pointer throttling and layout persistence. No library.
-//
-// Every other engine effectively re-implements this with its own primitives;
-// reading this file makes the others easier to read by inversion.
+// throttle + debounce, no library. Reference implementation for the other
+// engines to mirror.
 
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS,
-  DOCK_DEFAULT,
   MAX_PANELS,
   PERSIST_DEBOUNCE_MS,
   POINTER_THROTTLE_MS,
-  clampDockSize,
+  appendToTreeRight,
+  buildColumn,
+  buildMosaic,
+  buildRow,
+  cascadeFloating,
   clampPanelToViewport,
   clampResize,
   clearPersistedLayout,
   defaultBody,
-  defaultPanelLayout,
+  defaultFloatingGeometry,
   defaultTitle,
   emptySnapshot,
-  filterCommands,
+  equalizeTree,
+  findContainer,
+  findLeaf,
+  flattenPanelIds,
   genId,
   getViewport,
-  panelInDock,
   persistLayout,
   readPersistedLayout,
-  snapToEdges,
+  removeFromTree,
+  resizeContainerDivider,
+  setContainerSizes,
+  snapFloating,
+  splitAt,
 } from '../scenario';
 import type {
-  DockAnchor,
-  FloatingPanel,
   ModalSpec,
+  Panel,
   PanelKind,
   Unsubscribe,
   WorkspaceSnapshot,
@@ -40,26 +46,20 @@ export const nakedFactory: EngineFactory = {
   meta: {
     id: 'naked',
     label: 'Naked baseline',
-    description: 'Plain JS — mutable state, hand-rolled throttle + debounce.',
+    description: 'Plain JS — mutable state, recursive tree helpers, hand-rolled timers.',
     sourcePath: 'floating-workspace/src/engines/naked.ts',
   },
   create(): Engine {
     let state: WorkspaceSnapshot = emptySnapshot();
     const subs = new Set<(s: WorkspaceSnapshot) => void>();
-    // Pending modal promise resolvers, keyed by modal id.
-    const pendingResolvers = new Map<string, (result: unknown) => void>();
+    const pendingResolvers = new Map<string, (r: unknown) => void>();
     let lastMoveTime = 0;
     let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const emit = () => {
-      for (const cb of subs) cb(state);
-    };
+    const emit = () => { for (const cb of subs) cb(state); };
     const merge = (patch: Partial<WorkspaceSnapshot>) => {
       state = { ...state, ...patch };
       emit();
-    };
-    const setPanel = (panel: FloatingPanel) => {
-      state = { ...state, panels: { ...state.panels, [panel.id]: panel } };
     };
     const schedulePersist = () => {
       if (persistTimer) clearTimeout(persistTimer);
@@ -68,21 +68,22 @@ export const nakedFactory: EngineFactory = {
         persistLayout(state);
       }, PERSIST_DEBOUNCE_MS);
     };
-    const flushPersistNow = () => {
+    const flushPersist = () => {
       if (persistTimer) clearTimeout(persistTimer);
       persistTimer = null;
       persistLayout(state);
     };
 
-    const moveTop = (id: string) => {
-      const rest = state.zOrder.filter((x) => x !== id);
-      state = { ...state, zOrder: [...rest, id], focused: id };
+    const totalPanels = () => Object.keys(state.panels).length;
+
+    const moveFloatingTop = (id: string) => {
+      const rest = state.floatingZOrder.filter((x) => x !== id);
+      state = { ...state, floatingZOrder: [...rest, id], focused: id };
     };
 
     const pushModal = (spec: ModalSpec, resolver: (r: unknown) => void) => {
       pendingResolvers.set(spec.id, resolver);
-      state = { ...state, modals: [...state.modals, spec] };
-      emit();
+      merge({ modals: [...state.modals, spec] });
     };
 
     return {
@@ -93,17 +94,31 @@ export const nakedFactory: EngineFactory = {
       },
 
       openPanel(kind: PanelKind, opts) {
-        if (Object.keys(state.panels).length >= MAX_PANELS) return null;
+        if (totalPanels() >= MAX_PANELS) return null;
         const id = genId('panel');
-        const panel: FloatingPanel = {
-          id,
-          kind,
+        const mode = opts?.mode ?? 'tiled';
+        const panel: Panel = {
+          id, kind,
           title: opts?.title ?? defaultTitle(kind),
           body: opts?.body ?? defaultBody(kind),
-          ...defaultPanelLayout(kind),
+          mode,
+          ...defaultFloatingGeometry(kind),
+          ...(kind === 'inspector' ? { inspectorMode: 'static' } : {}),
         };
-        setPanel(panel);
-        state = { ...state, zOrder: [...state.zOrder, id], focused: id };
+        const panels = { ...state.panels, [id]: panel };
+        if (mode === 'tiled') {
+          state = {
+            ...state, panels,
+            tree: appendToTreeRight(state.tree, id),
+            focused: id,
+          };
+        } else {
+          state = {
+            ...state, panels,
+            floatingZOrder: [...state.floatingZOrder, id],
+            focused: id,
+          };
+        }
         emit();
         schedulePersist();
         return id;
@@ -133,8 +148,7 @@ export const nakedFactory: EngineFactory = {
 
       close(id, result) {
         // Modal?
-        const modalIdx = state.modals.findIndex((m) => m.id === id);
-        if (modalIdx >= 0) {
+        if (state.modals.some((m) => m.id === id)) {
           const resolver = pendingResolvers.get(id);
           pendingResolvers.delete(id);
           state = { ...state, modals: state.modals.filter((m) => m.id !== id) };
@@ -142,59 +156,47 @@ export const nakedFactory: EngineFactory = {
           resolver?.(result);
           return;
         }
-        // Floating panel
-        if (state.panels[id]) {
-          const { [id]: _, ...rest } = state.panels;
-          void _;
-          const zOrder = state.zOrder.filter((x) => x !== id);
-          const focused = state.focused === id ? (zOrder[zOrder.length - 1] ?? null) : state.focused;
-          state = { ...state, panels: rest, zOrder, focused };
-          emit();
-          schedulePersist();
-        }
+        // Panel
+        if (!state.panels[id]) return;
+        const { [id]: _drop, ...rest } = state.panels;
+        void _drop;
+        const tree = removeFromTree(state.tree, id);
+        const floatingZOrder = state.floatingZOrder.filter((x) => x !== id);
+        const focused =
+          state.focused === id
+            ? (floatingZOrder[floatingZOrder.length - 1] ?? null)
+            : state.focused;
+        state = { ...state, panels: rest, tree, floatingZOrder, focused };
+        emit();
+        schedulePersist();
       },
 
       focus(id) {
-        if (!state.panels[id]) return;
-        if (state.panels[id].dock !== null) {
-          state = { ...state, focused: id };
-          emit();
-          return;
-        }
-        if (state.focused === id && state.zOrder[state.zOrder.length - 1] === id) return;
-        moveTop(id);
-        emit();
-        schedulePersist();
-      },
-
-      dock(id, anchor) {
         const panel = state.panels[id];
         if (!panel) return;
-        // If the slot is occupied, kick out the existing dock-panel to floating.
-        const existing = panelInDock(state.panels, anchor);
-        let panels = state.panels;
-        let zOrder = state.zOrder;
-        if (existing && existing.id !== id) {
-          const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
-          panels = { ...panels, [restored.id]: restored };
-          if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+        if (panel.mode === 'floating') {
+          moveFloatingTop(id);
+        } else {
+          state = { ...state, focused: id };
         }
-        // Move this panel into the slot; remove from zOrder.
-        const docked: FloatingPanel = { ...panel, dock: anchor };
-        panels = { ...panels, [id]: docked };
-        zOrder = zOrder.filter((x) => x !== id);
-        state = { ...state, panels, zOrder, focused: id };
+        emit();
+      },
+
+      setBody(id, body) {
+        const panel = state.panels[id];
+        if (!panel) return;
+        state = { ...state, panels: { ...state.panels, [id]: { ...panel, body } } };
         emit();
         schedulePersist();
       },
 
-      undock(id) {
+      setInspectorMode(id, mode) {
         const panel = state.panels[id];
-        if (!panel || panel.dock === null) return;
-        const floating: FloatingPanel = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
-        const panels = { ...state.panels, [id]: floating };
-        const zOrder = state.zOrder.includes(id) ? state.zOrder : [...state.zOrder, id];
-        state = { ...state, panels, zOrder, focused: id };
+        if (!panel || panel.kind !== 'inspector') return;
+        state = {
+          ...state,
+          panels: { ...state.panels, [id]: { ...panel, inspectorMode: mode } },
+        };
         emit();
         schedulePersist();
       },
@@ -209,33 +211,164 @@ export const nakedFactory: EngineFactory = {
         emit();
       },
 
-      setBody(id, body) {
+      setPanelMode(id, mode) {
         const panel = state.panels[id];
-        if (!panel) return;
-        setPanel({ ...panel, body });
+        if (!panel || panel.mode === mode) return;
+        if (mode === 'floating') {
+          // Tiled → floating
+          const tree = removeFromTree(state.tree, id);
+          const updated: Panel = {
+            ...panel,
+            mode: 'floating',
+            x: panel.x || 120,
+            y: panel.y || 120,
+            w: panel.w || 360,
+            h: panel.h || 240,
+          };
+          state = {
+            ...state,
+            panels: { ...state.panels, [id]: updated },
+            tree,
+            floatingZOrder: [...state.floatingZOrder, id],
+            focused: id,
+          };
+        } else {
+          // Floating → tiled
+          const updated: Panel = { ...panel, mode: 'tiled' };
+          state = {
+            ...state,
+            panels: { ...state.panels, [id]: updated },
+            tree: appendToTreeRight(state.tree, id),
+            floatingZOrder: state.floatingZOrder.filter((x) => x !== id),
+            focused: id,
+          };
+        }
         emit();
         schedulePersist();
       },
 
-      startDrag(id, px, py) {
-        const panel = state.panels[id];
-        if (!panel || panel.dock !== null) return; // docked panels don't drag
-        moveTop(id);
+      splitTile(srcId, targetId, edge) {
+        const srcPanel = state.panels[srcId];
+        const targetLeaf = findLeaf(state.tree, targetId);
+        if (!srcPanel || !targetLeaf || srcId === targetId) return;
+        // Remove src from wherever it is.
+        let tree = state.tree;
+        let floatingZOrder = state.floatingZOrder;
+        if (srcPanel.mode === 'tiled') {
+          tree = removeFromTree(tree, srcId);
+        } else {
+          floatingZOrder = floatingZOrder.filter((x) => x !== srcId);
+        }
+        // Insert next to target.
+        if (!tree) {
+          // Shouldn't happen — target leaf was found, so tree exists. Safety.
+          tree = removeFromTree(state.tree, srcId);
+        }
+        tree = splitAt(tree!, targetId, edge, srcId);
+        const updatedSrc: Panel = { ...srcPanel, mode: 'tiled' };
         state = {
           ...state,
-          interaction: { kind: 'drag', id, offset: { x: px - panel.x, y: py - panel.y } },
+          panels: { ...state.panels, [srcId]: updatedSrc },
+          tree,
+          floatingZOrder,
+          focused: srcId,
+          interaction: null,
+        };
+        emit();
+        schedulePersist();
+      },
+
+      arrangeCascadeFloating() {
+        const fpanels = state.floatingZOrder
+          .map((id) => state.panels[id])
+          .filter((p): p is Panel => !!p);
+        if (fpanels.length === 0) return;
+        const viewport = getViewport();
+        const next = cascadeFloating(fpanels, viewport);
+        const panels = { ...state.panels };
+        for (const p of next) panels[p.id] = p;
+        state = { ...state, panels };
+        emit();
+        schedulePersist();
+      },
+
+      arrangeMosaicTiled() {
+        const tiledIds = flattenPanelIds(state.tree);
+        state = { ...state, tree: buildMosaic(tiledIds) };
+        emit();
+        schedulePersist();
+      },
+      arrangeRows() {
+        const tiledIds = flattenPanelIds(state.tree);
+        state = { ...state, tree: buildRow(tiledIds) };
+        emit();
+        schedulePersist();
+      },
+      arrangeColumns() {
+        const tiledIds = flattenPanelIds(state.tree);
+        state = { ...state, tree: buildColumn(tiledIds) };
+        emit();
+        schedulePersist();
+      },
+      arrangeEqualizeTiles() {
+        state = { ...state, tree: equalizeTree(state.tree) };
+        emit();
+        schedulePersist();
+      },
+
+      setAllPanelsMode(mode) {
+        const allIds = Object.keys(state.panels);
+        if (mode === 'floating') {
+          const panels = { ...state.panels };
+          for (const id of allIds) panels[id] = { ...panels[id]!, mode: 'floating' };
+          state = {
+            ...state, panels,
+            tree: null,
+            floatingZOrder: allIds,
+          };
+        } else {
+          const panels = { ...state.panels };
+          for (const id of allIds) panels[id] = { ...panels[id]!, mode: 'tiled' };
+          state = {
+            ...state, panels,
+            tree: buildMosaic(allIds),
+            floatingZOrder: [],
+          };
+        }
+        emit();
+        schedulePersist();
+      },
+
+      startFloatingDrag(id, px, py) {
+        const panel = state.panels[id];
+        if (!panel || panel.mode !== 'floating') return;
+        moveFloatingTop(id);
+        state = {
+          ...state,
+          interaction: { kind: 'drag-floating', id, offset: { x: px - panel.x, y: py - panel.y } },
         };
         emit();
       },
 
-      startResize(id, px, py) {
+      startTileDrag(id, _px, _py) {
+        void _px; void _py;
         const panel = state.panels[id];
-        if (!panel || panel.dock !== null) return; // docked panels don't free-resize
-        moveTop(id);
+        if (!panel || panel.mode !== 'tiled') return;
+        state = {
+          ...state,
+          interaction: { kind: 'drag-tiled', id, targetLeafId: null, targetZone: null },
+        };
+        emit();
+      },
+
+      startFloatingResize(id, px, py) {
+        const panel = state.panels[id];
+        if (!panel || panel.mode !== 'floating') return;
+        moveFloatingTop(id);
         state = {
           ...state,
           interaction: {
-            kind: 'resize',
+            kind: 'resize-floating',
             id,
             startSize: { w: panel.w, h: panel.h },
             startPointer: { x: px, y: py },
@@ -244,14 +377,18 @@ export const nakedFactory: EngineFactory = {
         emit();
       },
 
-      startDockResize(anchor, px, py) {
+      startDividerResize(containerId, dividerIdx, px, py, containerLengthPx) {
+        const container = findContainer(state.tree, containerId);
+        if (!container) return;
         state = {
           ...state,
           interaction: {
-            kind: 'dock-resize',
-            anchor,
-            startSize: state.dockSizes[anchor],
-            startPointer: anchor === 'bottom' ? py : px,
+            kind: 'divider-resize',
+            containerId,
+            dividerIdx,
+            startSizes: [...container.sizes],
+            startPointer: container.dir === 'row' ? px : py,
+            containerLength: containerLengthPx,
           },
         };
         emit();
@@ -264,26 +401,21 @@ export const nakedFactory: EngineFactory = {
         lastMoveTime = now;
         const viewport = getViewport();
         const inter = state.interaction;
-        if (inter.kind === 'dock-resize') {
-          // Pointer delta along the perpendicular axis.
-          const cur = inter.anchor === 'bottom' ? py : px;
-          let delta = cur - inter.startPointer;
-          // left dock grows when pointer moves right; right & bottom dock grow
-          // when pointer moves *toward* their anchor — sign flips for right/bottom.
-          if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
-          const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
-          state = { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
+
+        if (inter.kind === 'drag-floating') {
+          const panel = state.panels[inter.id];
+          if (!panel) return;
+          const moved = { ...panel, x: px - inter.offset.x, y: py - inter.offset.y };
+          const clamped = clampPanelToViewport(moved, viewport);
+          const others = Object.values(state.panels).filter((p) => p.id !== inter.id && p.mode === 'floating');
+          const snapped = snapFloating(clamped, viewport, others);
+          state = { ...state, panels: { ...state.panels, [inter.id]: snapped } };
           emit();
           return;
         }
-        const panel = state.panels[inter.id];
-        if (!panel) return;
-        if (inter.kind === 'drag') {
-          const moved = { ...panel, x: px - inter.offset.x, y: py - inter.offset.y };
-          const clamped = clampPanelToViewport(moved, viewport);
-          const snapped = snapToEdges(clamped, viewport);
-          setPanel(snapped);
-        } else if (inter.kind === 'resize') {
+        if (inter.kind === 'resize-floating') {
+          const panel = state.panels[inter.id];
+          if (!panel) return;
           const dx = px - inter.startPointer.x;
           const dy = py - inter.startPointer.y;
           const sized = clampResize(
@@ -292,26 +424,80 @@ export const nakedFactory: EngineFactory = {
             { x: panel.x, y: panel.y },
             viewport,
           );
-          setPanel({ ...panel, ...sized });
+          state = {
+            ...state,
+            panels: { ...state.panels, [inter.id]: { ...panel, ...sized } },
+          };
+          emit();
+          return;
         }
+        if (inter.kind === 'divider-resize') {
+          const container = findContainer(state.tree, inter.containerId);
+          if (!container) return;
+          const delta = (container.dir === 'row' ? px : py) - inter.startPointer;
+          const nextSizes = resizeContainerDivider(
+            inter.startSizes,
+            inter.dividerIdx,
+            delta,
+            inter.containerLength,
+          );
+          state = { ...state, tree: setContainerSizes(state.tree!, inter.containerId, nextSizes) };
+          emit();
+          return;
+        }
+        // drag-tiled — pointerMove doesn't update geometry; UI calls setTileDropTarget
+      },
+
+      setTileDropTarget(leafId, zone) {
+        const inter = state.interaction;
+        if (!inter || inter.kind !== 'drag-tiled') return;
+        if (inter.targetLeafId === leafId && inter.targetZone === zone) return;
+        state = {
+          ...state,
+          interaction: { ...inter, targetLeafId: leafId, targetZone: zone },
+        };
         emit();
       },
 
       pointerUp() {
-        if (!state.interaction) return;
+        const inter = state.interaction;
+        if (!inter) return;
+        if (inter.kind === 'drag-tiled' && inter.targetLeafId && inter.targetZone) {
+          // Find target leaf's panel id from its node id.
+          const findByNode = (t: WorkspaceSnapshot['tree'], nid: string): string | null => {
+            if (!t) return null;
+            if (t.kind === 'leaf') return t.id === nid ? t.panelId : null;
+            for (const c of t.children) {
+              const r = findByNode(c, nid);
+              if (r) return r;
+            }
+            return null;
+          };
+          const targetPanelId = findByNode(state.tree, inter.targetLeafId);
+          if (targetPanelId && targetPanelId !== inter.id) {
+            // For 'center' drop we'd ideally swap; for simplicity treat as 'right'.
+            const edge = inter.targetZone === 'center' ? 'right' : inter.targetZone;
+            this.splitTile(inter.id, targetPanelId, edge);
+            return;
+          }
+        }
         state = { ...state, interaction: null };
         emit();
-        flushPersistNow();
+        flushPersist();
+      },
+
+      setCursor(x, y, overPanelId) {
+        if (state.cursor.x === x && state.cursor.y === y && state.cursor.overPanelId === overPanelId) return;
+        state = { ...state, cursor: { x, y, overPanelId } };
+        emit();
       },
 
       onKey({ key, meta, ctrl }) {
         const mod = meta || ctrl;
-        // Command palette
         if (mod && (key === 'k' || key === 'K')) {
           this.openCommandPalette(COMMAND_PALETTE_COMMANDS);
           return true;
         }
-        // Close
         if (key === 'Escape') {
           const topModal = state.modals[state.modals.length - 1];
           if (topModal) {
@@ -334,14 +520,15 @@ export const nakedFactory: EngineFactory = {
       loadLayout() {
         const layout = readPersistedLayout();
         if (!layout) return;
-        // Restore panels + zOrder; drop ids that vanished from `panels`.
-        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
+        // Drop ids that exist in tree/zOrder but not in panels.
+        const validIds = new Set(Object.keys(layout.panels));
+        const cleanedZOrder = layout.floatingZOrder.filter((id) => validIds.has(id));
         state = {
           ...emptySnapshot(),
           panels: layout.panels,
-          zOrder: surviving,
-          dockSizes: layout.dockSizes ?? state.dockSizes,
-          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          tree: layout.tree,
+          floatingZOrder: cleanedZOrder,
+          focused: validIds.has(layout.focused ?? '') ? layout.focused : null,
         };
         emit();
       },
@@ -349,11 +536,7 @@ export const nakedFactory: EngineFactory = {
       reset() {
         if (persistTimer) clearTimeout(persistTimer);
         persistTimer = null;
-        // Resolve any pending modal promises so callers don't hang.
-        for (const [id, resolver] of pendingResolvers) {
-          void id;
-          resolver(undefined);
-        }
+        for (const [, r] of pendingResolvers) r(undefined);
         pendingResolvers.clear();
         state = emptySnapshot();
         emit();
@@ -368,3 +551,4 @@ export const nakedFactory: EngineFactory = {
     };
   },
 };
+

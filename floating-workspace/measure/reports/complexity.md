@@ -2,15 +2,16 @@
 
 | engine       | cyclo | nesting | as | ! |
 |--------------|---:|---:|---:|---:|
-| rtk-listener |    57 |       6 |  5 |  0 |
-| redux-saga   |    57 |       6 |  6 |  0 |
-| effector     |    61 |       7 |  1 |  0 |
-| reatom       |    62 |       8 |  1 |  0 |
-| redux-thunk  |    62 |       6 |  4 |  0 |
-| naked        |    64 |       7 |  1 |  0 |
-| triggery     |    68 |       7 |  3 |  0 |
-| rxjs         |    73 |       7 |  1 |  0 |
-| xstate       |    74 |       8 |  4 |  0 |
+| redux-saga   |    32 |       6 |  1 |  0 |
+| rtk-listener |    33 |       7 |  1 |  0 |
+| redux-thunk  |    36 |       6 |  1 |  0 |
+| _redux-slice |    65 |       5 |  2 |  3 |
+| xstate       |    92 |      11 |  2 |  3 |
+| triggery     |    93 |       9 |  4 |  3 |
+| naked        |    94 |       8 |  1 |  4 |
+| effector     |    94 |       7 |  2 |  3 |
+| reatom       |    94 |       9 |  2 |  3 |
+| rxjs         |   116 |       7 |  2 |  3 |
 
 - **cyclo**: rough cyclomatic count (if/for/while/case/catch/&&/||/?: + 1).
 - **nesting**: deepest brace nesting in the file.

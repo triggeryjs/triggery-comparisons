@@ -10,7 +10,7 @@ Side-by-side, honest comparisons of orchestration libraries on identical real-wo
 |---|---|---|
 | [`notifications-pipeline`](./notifications-pipeline) | ✅ shipped | triggery · effector · rxjs · reatom · RTK listenerMiddleware · redux-thunk · redux-saga · naked baseline |
 | [`wizard-form`](./wizard-form) | ✅ shipped | + xstate (9 implementations total) |
-| [`floating-workspace`](./floating-workspace) | ✅ shipped | 9 engines — IDE-like window manager: drag + resize + dock slots + shared resize dividers + modals + keyboard |
+| [`floating-workspace`](./floating-workspace) | ✅ shipped | 9 engines — IDE-like window manager: tree-based tiling + per-panel mode toggle + panel-to-panel snap + live inspectors + modals + keyboard |
 
 More to come (`debounced-search`, others). PRs welcome.
 
@@ -41,19 +41,19 @@ Two scenarios shipped so far. They probe different shapes of the same problem sp
 | **Latency p50** | reatom — 2.1 µs | 3rd (2.5 µs) |
 | **Scaling (+2 async fields)** | effector — +40; **triggery — +27** | best-of-the-rest |
 
-### [`floating-workspace`](./floating-workspace) — IDE-like window manager (drag + dock + modals)
+### [`floating-workspace`](./floating-workspace) — IDE-like window manager (tree tiling + floating + modals)
 
 | axis | leader | triggery |
 |---|---|---|
-| **LOC** | redux-thunk — 253 | 8th (391 — 4-trigger split is structural overhead) |
-| **API surface** | **triggery — 1 import / 2 symbols** | **1st** |
-| **Bundle (gzipped)** | reatom — 5.17 KB | 3rd (6.99 KB) |
-| **Dependency footprint** | **triggery — 1 npm package** *(tied)* | **1st** |
-| **Drag throughput** | thunk — 7.8M ev/sec *(throttle-honoring)* | 6th (231k) |
-| **Latency p50** | naked — 0.67 µs | 4th (2.5 µs) |
-| **Cyclomatic complexity** | rtk / saga — 57 | 7th (68) |
+| **LOC** | redux-thunk — 168 *(+ 202 shared slice)* | 4th (344 — single file, no shared slice) |
+| **API surface** | **triggery / reatom / effector — 2 symbols** *(tied)* | **1st** *(tied)* |
+| **Bundle (gzipped)** | naked — 4.21 KB | 3rd (8.23 KB — beats redux trio + rxjs + xstate) |
+| **Dependency footprint** | naked — 0 packages | **tied 2nd** *(1 package)* |
+| **Drag throughput** | naked — 7.8M ev/sec *(throttle-honoring)* | 7th (269k — runtime dispatch path overhead) |
+| **Latency p50** | naked — 0.67 µs | **3rd** (2.7 µs — beats every redux/xstate variant) |
+| **Cyclomatic complexity** | redux-saga — 32 *(slice excluded)* | 5th (93 — same band as naked/effector/reatom) |
 
-> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace it loses LOC + cyclomatic to slice-based engines because its 4-trigger split is structural overhead this 28-rule app doesn't amortise — but still wins bundle, API surface, and deps footprint. RxJS is best at drag-stream shape; redux-thunk is shortest for slice-shaped record state; xstate sits between (declarative statechart for FSM scenarios, expensive everywhere else). **Each scenario rewards a different mental model — that's the point.**
+> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace its 22-method engine surface puts LOC into the middle of the pack, but the **API surface is still tied 1st, bundle is 3rd, and dependency footprint is 1 package** — the home-turf wins hold. Naked wins everything that doesn't involve a library; reatom is the closest library to naked on every axis except concept count. The redux trio look small per-file only because they share a 202-LOC slice — count both files and they land near triggery. **Each scenario rewards a different mental model — that's the point.**
 
 ## What we measure
 
