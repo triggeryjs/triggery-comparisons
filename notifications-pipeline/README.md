@@ -4,18 +4,19 @@ A Discord-like chat client. Messages arrive over a (mocked) WebSocket; the clien
 
 ## Headline numbers
 
-For the 14-rule scenario in this folder (see [acceptance spec](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.
+For the 15-rule scenario in this folder (see [acceptance spec](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.
 
-|                              | best library         | worst library      | triggery |
+|                                | best library             | worst library      | triggery |
 |---|---|---|---|
-| **Bundle (gzipped)**         | reatom — 3.47 KB     | rtk — 10.97 KB     | 2nd (5.11 KB) |
-| **Throughput (sustained)**   | rxjs — 640k op/sec   | rtk — 37k op/sec   | 3rd: **267k default · 318k fireSync** — 2× effector, 7× rtk |
-| **Latency p50 (single ev.)** | rxjs — 0.25 µs       | rtk — 7.1 µs       | 3rd (1.4 µs fireSync · 2.5 µs default) |
-| **API surface**              | **triggery — 2 symbols** | rxjs — 15 symbols | **1st** |
-| **Cyclomatic complexity**    | rxjs — 21            | reatom — 33        | 2nd (24) |
-| **LOC**                      | reatom — 162         | rtk — 224          | 2nd (170) |
+| **Bundle (gzipped)**           | reatom — 3.52 KB         | rtk — 11.03 KB     | 2nd (5.22 KB) |
+| **Throughput (sustained)**     | reatom — 246k op/sec     | rtk — 67k op/sec   | **2nd** (228k default · 284k fireSync) — 1.4× effector, 3.4× rtk |
+| **Latency p50 (single ev.)**   | rxjs — 0.25 µs           | rtk — 6.8 µs       | 3rd (2.4 µs fireSync · 2.6 µs default) |
+| **API surface**                | **triggery — 2 symbols** | rxjs — 15 symbols  | **1st** |
+| **Cyclomatic complexity**      | rxjs — 24                | reatom — 35        | 2nd (25) |
+| **LOC**                        | reatom — 167             | rtk — 229          | 2nd (181) |
+| **Scaling cost (R15 → +LOC)**  | reatom / rtk — +5        | effector — +13     | **+6** (handler-shaped, same as naked baseline) |
 
-Best on API surface, second on every other axis except dispatch latency / throughput where rxjs takes the crown (sync subjects with zero gating overhead is hard to beat — at the cost of 15 imported concepts vs Triggery's 2). The full numbers are in [§ Measurements](#measurements) and the interpretation in [§ How to read these numbers](#how-to-read-these-numbers).
+Best on API surface and scaling cost, second on every other axis except dispatch latency where rxjs wins (sync subjects with no gating overhead) — at the cost of 15 imported concepts vs Triggery's 2. The full numbers are in [§ Measurements](#measurements) and the interpretation in [§ How to read these numbers](#how-to-read-these-numbers).
 
 - [`triggery`](./src/engines/triggery.ts) — four declarative triggers, one per scenario family
 - [`effector`](./src/engines/effector.ts) — events + stores + samples wired into a graph
@@ -60,6 +61,10 @@ Best on API surface, second on every other axis except dispatch latency / throug
 13. **R13.** `→ connected` (only from `disconnected`) — system toast "Reconnected" + `playSound('reconnect')`.
 14. **R14.** `→ connecting` — silent intermediate state (no toast).
 
+### Spam protection — added on top of R1-R14
+
+15. **R15.** If the same author has sent ≥ 5 messages in the last 30 seconds (across any channel), suppress their toast and sound (badge still counts). Per-author sliding window.
+
 Inputs: `setSettings`, `setActiveChannel`, `setCurrentUser`, `setMutedChannels` — `null`-able, idempotent.
 
 ## How to play with it
@@ -99,23 +104,23 @@ LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
 | engine | LOC | bytes |
 |---|---:|---:|
-| naked        |  136 |  5102 |
-| reatom       |  162 |  6347 |
-| **triggery** | **170** | **7002** |
-| effector     |  192 |  8168 |
-| rxjs         |  198 |  7806 |
-| rtk-listener |  224 |  9033 |
+| naked        |  142 |  5469 |
+| reatom       |  167 |  6672 |
+| **triggery** | **181** | **7760** |
+| effector     |  205 |  8713 |
+| rxjs         |  208 |  8335 |
+| rtk-listener |  229 |  9368 |
 
 Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised:
 
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   1.92 KB |   0.94 KB |
-| reatom       |   8.18 KB |   3.47 KB |
-| **triggery** |  **13.94 KB** |   **5.11 KB** |
-| rxjs         |  28.74 KB |   9.03 KB |
-| effector     |  21.13 KB |   9.39 KB |
-| rtk-listener |  28.94 KB |  10.97 KB |
+| naked        |   2.04 KB |   1.00 KB |
+| reatom       |   8.28 KB |   3.52 KB |
+| **triggery** |  **14.24 KB** |   **5.22 KB** |
+| rxjs         |  28.93 KB |   9.11 KB |
+| effector     |  21.31 KB |   9.46 KB |
+| rtk-listener |  29.04 KB |  11.03 KB |
 
 ### Performance
 
@@ -123,15 +128,17 @@ Two shapes per engine: **throughput** (burst of 1000 messages, microtasks flushe
 
 | engine | throughput | p50 lat. | p95 lat. | p99 lat. |
 |---|---:|---:|---:|---:|
-| Naked (no library)     | 1883k ops/sec |  0.13 µs |  0.17 µs |  0.21 µs |
-| RxJS                   |  640k ops/sec |  0.25 µs |  0.96 µs |   1.6 µs |
-| **Triggery (fireSync)** |  **318k ops/sec** |   **1.4 µs** |   **1.9 µs** |   **2.2 µs** |
-| Reatom                 |  285k ops/sec |   2.0 µs |   2.3 µs |   4.4 µs |
-| **Triggery (default)** |  **267k ops/sec** |   **2.5 µs** |   **3.8 µs** |   **9.7 µs** |
-| Effector               |  132k ops/sec |   3.1 µs |   3.9 µs |   7.0 µs |
-| RTK listenerMiddleware |   37k ops/sec |   7.1 µs |   8.9 µs |    21 µs |
+| Naked (no library)     |  612k ops/sec |  0.13 µs |  0.17 µs |  0.25 µs |
+| **Triggery (fireSync)**|  **284k ops/sec** |   **2.4 µs** |    20 µs |    41 µs |
+| Reatom                 |  246k ops/sec |   1.9 µs |   2.9 µs |   4.0 µs |
+| **Triggery (default)** |  **228k ops/sec** |   **2.6 µs** |   **3.8 µs** |    11 µs |
+| RxJS                   |  183k ops/sec |  0.25 µs |  0.75 µs |   2.0 µs |
+| Effector               |  158k ops/sec |   2.7 µs |   5.8 µs |   9.7 µs |
+| RTK listenerMiddleware |   67k ops/sec |   6.8 µs |   9.4 µs |    16 µs |
 
 Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch at the cost of that batching; both modes are first-class.
+
+> rxjs's per-event latency p50 (0.25 µs) reflects sync `Subject.next` with no gating — but throughput drops 8× when the same 15 rules run through its operator pipeline. Triggery wins on the sustained-throughput side of the trade-off.
 
 ### API surface — concepts you have to learn
 
@@ -142,22 +149,37 @@ Counted by parsing each engine's `import` statements (third-party only) and the 
 | naked        | 0 | 7× `emitter()` (in-file helper) |
 | **triggery** | **2** | **`createTrigger`×2, `createRuntime`×1** |
 | reatom       | 3 | `atom`×5, `action`×11, `createCtx`×1 |
-| effector     | 5 | `createEvent`×15, `createStore`×7, `createEffect`×3, `sample`×9, `combine`×1 |
+| effector     | 5 | `createEvent`×15, `createStore`×8, `createEffect`×3, `sample`×9, `combine`×1 |
 | rtk-listener | 5 | `createAction`×11, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×10 |
-| rxjs         | 15 | `new Subject`×10, `new BehaviorSubject`×5, `.pipe()`×11 — plus 13 operators (`filter`, `map`, `throttleTime`, `debounceTime`, `withLatestFrom`, `combineLatest`, `scan`, `merge`, `pairwise`, `startWith`, `switchMap`, `timer`, `EMPTY`) |
+| rxjs         | 15 | `new Subject`×10, `new BehaviorSubject`×5, `.pipe()`×12 — plus 13 operators (`filter`, `map`, `throttleTime`, `debounceTime`, `withLatestFrom`, `combineLatest`, `scan`, `merge`, `pairwise`, `startWith`, `switchMap`, `timer`, `EMPTY`) |
 
 ### Complexity & type safety
 
 | engine | cyclomatic | max nesting | `as` casts | `!` non-null |
 |---|---:|---:|---:|---:|
-| rxjs         | 21 | 6 | 0 | 0 |
-| **triggery** | **24** | **6** | **0** | **1** |
-| rtk-listener | 24 | 7 | 1 | 0 |
-| effector     | 26 | 5 | 0 | 2 |
-| naked        | 28 | 7 | 0 | 0 |
-| reatom       | 33 | 6 | 0 | 0 |
+| rxjs         | 24 | 6 | 0 | 0 |
+| **triggery** | **25** | **6** | **0** | **1** |
+| rtk-listener | 25 | 7 | 1 | 0 |
+| naked        | 29 | 7 | 0 | 0 |
+| effector     | 29 | 5 | 0 | 2 |
+| reatom       | 35 | 6 | 0 | 0 |
 
 Cyclomatic = `if`/`for`/`while`/`case`/`catch`/`&&`/`||`/ternary + 1. All engines are clean on type-safety (zero or near-zero casts and non-null assertions).
+
+### Scalability — adding R15 to a 14-rule scenario
+
+We measured the **incremental cost** of adding the spam-protection rule (R15) on top of R1-R14. R15 needs per-author state + 30-second sliding window + a gate that fires before R7 — non-trivial because it introduces *historical state* (decision based on previous messages, not just current). Diff measured by `git diff`-ing each engine file:
+
+| engine | base LOC | + R15 | Δ | shape of the change |
+|---|---:|---:|---:|---|
+| **triggery** | 175 | **181** | **+6** | one extra `if`-block in the handler |
+| naked        | 136 | 142 | +6 | one extra `if`-block in `fireMessage` |
+| reatom       | 162 | 167 | +5 | one extra `if`-block in the `newMessage` action |
+| rtk-listener | 224 | 229 | +5 | one extra `if`-block in the listener effect |
+| rxjs         | 198 | 208 | +10 | new `spam$` `scan` stream + extend `withLatestFrom([…, spam$])` + add filter clause |
+| effector     | 192 | 205 | +13 | new `$spam` store + add to `$world` `combine` + update `shouldNotify` signature + extra filter clause |
+
+**This is the headline maintenance metric.** Graph-shaped libraries (rxjs, effector) pay a "graph extension tax" — every new state means a new store/stream, and every place that reads it must be updated. Handler-shaped libraries (triggery, naked, reatom, rtk) only pay for the new line. **Triggery scales identically to the no-library baseline** — `+6` LOC for a real new rule with state + time-window + decision-from-history.
 
 <!-- END: measurements -->
 

@@ -90,6 +90,7 @@ export const rtkListenerFactory: EngineFactory = {
 
     const typingByChannel = new Map<string, Set<string>>();
     const toastWindow: number[] = [];
+    const spamWindow = new Map<string, number[]>(); // R15
 
     // R1-R7 — main message rule
     listener.startListening({
@@ -103,13 +104,19 @@ export const rtkListenerFactory: EngineFactory = {
         const isMuted = w.muted.includes(msg.channelId);
         dispatch(incBadge({ channelId: msg.channelId, muted: isMuted }));
 
+        // R15: 5+ messages from this author in last 30 s → suppress
+        const now = Date.now();
+        const times = (spamWindow.get(msg.author.id) ?? []).filter((t) => t >= now - 30_000);
+        times.push(now);
+        spamWindow.set(msg.author.id, times);
+        if (times.length >= 5) return;
+
         if (msg.channelId === w.active) return;
         if (isMuted) return;
         if (!w.settings?.notifications) return;
         if (w.settings.mentionsOnly && !isMention) return;
         if (w.settings.dnd && !isMention) return;
 
-        const now = Date.now();
         while (toastWindow.length && now - toastWindow[0]! >= 1000) toastWindow.shift();
         if (toastWindow.length < 3) {
           toastWindow.push(now);

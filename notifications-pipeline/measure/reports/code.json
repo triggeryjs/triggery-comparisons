@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-17T23:48:49.912Z",
+  "measuredAt": "2026-05-18T00:14:30.062Z",
   "rows": [
     {
       "engine": "naked",
@@ -9,7 +9,7 @@
         "emitter": 7
       },
       "primitivesTotal": 7,
-      "cyclo": 28,
+      "cyclo": 29,
       "nesting": 7,
       "asCasts": 0,
       "nonNull": 0
@@ -23,7 +23,7 @@
         "createRuntime": 1
       },
       "primitivesTotal": 3,
-      "cyclo": 24,
+      "cyclo": 25,
       "nesting": 6,
       "asCasts": 0,
       "nonNull": 1
@@ -38,7 +38,7 @@
         "createCtx": 1
       },
       "primitivesTotal": 17,
-      "cyclo": 33,
+      "cyclo": 35,
       "nesting": 6,
       "asCasts": 0,
       "nonNull": 0
@@ -49,13 +49,13 @@
       "importedSymbols": 5,
       "primitives": {
         "createEvent": 15,
-        "createStore": 7,
+        "createStore": 8,
         "createEffect": 3,
         "sample": 9,
         "combine": 1
       },
-      "primitivesTotal": 35,
-      "cyclo": 26,
+      "primitivesTotal": 36,
+      "cyclo": 29,
       "nesting": 5,
       "asCasts": 0,
       "nonNull": 2
@@ -71,7 +71,7 @@
         "startListening": 10
       },
       "primitivesTotal": 23,
-      "cyclo": 24,
+      "cyclo": 25,
       "nesting": 7,
       "asCasts": 1,
       "nonNull": 0
@@ -83,10 +83,10 @@
       "primitives": {
         "Subject": 10,
         "BehaviorSubject": 5,
-        ".pipe(": 11
+        ".pipe(": 12
       },
-      "primitivesTotal": 26,
-      "cyclo": 21,
+      "primitivesTotal": 27,
+      "cyclo": 24,
       "nesting": 6,
       "asCasts": 0,
       "nonNull": 0

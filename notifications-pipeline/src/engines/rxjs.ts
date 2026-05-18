@@ -54,6 +54,17 @@ export const rxjsFactory: EngineFactory = {
       map(([settings, active, user, muted]) => ({ settings, active, user, muted })),
     );
 
+    // R15: per-author sliding window of timestamps, scanned over the message stream
+    const spam$ = newMessage$.pipe(
+      scan((m, msg) => {
+        const now = Date.now();
+        const next = new Map(m);
+        next.set(msg.author.id, [...(next.get(msg.author.id) ?? []).filter((t) => t >= now - 30_000), now]);
+        return next;
+      }, new Map<string, number[]>()),
+      startWith(new Map<string, number[]>()),
+    );
+
     // ───── outputs ───────────────────────────────────────────────────
     const showToast$ = new Subject<ToastPayload>();
     const playSound$ = new Subject<Sound>();
@@ -73,12 +84,13 @@ export const rxjsFactory: EngineFactory = {
       )
       .subscribe(incBadge$);
 
-    // R6-R7 — gated notifications stream (reused for both toast and sound)
+    // R6-R7 + R15 — gated notifications stream (reused for both toast and sound)
     const notify$ = newMessage$.pipe(
-      withLatestFrom(world$),
-      filter(([m, w]) => {
+      withLatestFrom(world$, spam$),
+      filter(([m, w, spam]) => {
         if (!w.user || !w.settings) return false;
         if (m.author.id === w.user.id) return false;
+        if ((spam.get(m.author.id)?.length ?? 0) >= 5) return false; // R15
         if (m.channelId === w.active) return false;
         if (w.muted.has(m.channelId)) return false;
         if (!w.settings.notifications) return false;

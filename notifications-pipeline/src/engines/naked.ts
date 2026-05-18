@@ -44,6 +44,7 @@ export const nakedFactory: EngineFactory = {
     let channelTimer: ReturnType<typeof setTimeout> | null = null;
     const toastWindow: number[] = [];
     const typingByChannel = new Map<string, Set<string>>();
+    const spamWindow = new Map<string, number[]>(); // R15
 
     const toastE = emitter<[ToastPayload]>();
     const soundE = emitter<[Sound]>();
@@ -66,6 +67,13 @@ export const nakedFactory: EngineFactory = {
         const isMention = msg.mentions.includes(user.id);
         const isMuted = muted.has(msg.channelId);
         incBadgeE.emit(msg.channelId, isMuted);
+
+        // R15: 5+ messages from this author in last 30 s → suppress
+        const now = Date.now();
+        const times = (spamWindow.get(msg.author.id) ?? []).filter((t) => t >= now - 30_000);
+        times.push(now);
+        spamWindow.set(msg.author.id, times);
+        if (times.length >= 5) return;
 
         if (msg.channelId === active) return;
         if (isMuted) return;

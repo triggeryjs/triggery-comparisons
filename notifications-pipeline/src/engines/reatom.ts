@@ -45,6 +45,7 @@ export const reatomFactory: EngineFactory = {
     let channelTimer: ReturnType<typeof setTimeout> | null = null;
     const toastWindow: number[] = [];
     const typingByChannel = new Map<string, Set<string>>();
+    const spamWindow = new Map<string, number[]>(); // R15
 
     const newMessage = action((c, msg: Message) => {
       const user = c.get(userAtom);
@@ -57,13 +58,19 @@ export const reatomFactory: EngineFactory = {
       const isMuted = muted.has(msg.channelId);
       incrementBadge(c, { channelId: msg.channelId, muted: isMuted });
 
+      // R15: 5+ messages from this author in last 30 s → suppress
+      const now = Date.now();
+      const times = (spamWindow.get(msg.author.id) ?? []).filter((t) => t >= now - 30_000);
+      times.push(now);
+      spamWindow.set(msg.author.id, times);
+      if (times.length >= 5) return;
+
       if (msg.channelId === active) return;
       if (isMuted) return;
       if (!settings || !settings.notifications) return;
       if (settings.mentionsOnly && !isMention) return;
       if (settings.dnd && !isMention) return;
 
-      const now = Date.now();
       while (toastWindow.length && now - toastWindow[0]! >= 1000) toastWindow.shift();
       if (toastWindow.length < 3) {
         toastWindow.push(now);

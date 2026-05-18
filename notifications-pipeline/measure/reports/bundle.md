@@ -1,8 +1,8 @@
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   1.92 KB |   0.94 KB |
-| reatom       |   8.18 KB |   3.47 KB |
-| triggery     |  14.12 KB |   5.17 KB |
-| effector     |  21.13 KB |   9.39 KB |
-| rxjs         |  28.74 KB |   9.03 KB |
-| rtk-listener |  28.94 KB |  10.97 KB |
+| naked        |   2.04 KB |   1.00 KB |
+| reatom       |   8.28 KB |   3.52 KB |
+| triggery     |  14.24 KB |   5.22 KB |
+| effector     |  21.31 KB |   9.46 KB |
+| rxjs         |  28.93 KB |   9.11 KB |
+| rtk-listener |  29.04 KB |  11.03 KB |

@@ -42,7 +42,15 @@ export const effectorFactory: EngineFactory = {
     sample({ clock: connectionChanged, source: $conn, target: $prevConn });
     $conn.on(connectionChanged, (_, s) => s);
 
-    const $world = combine({ settings: $settings, active: $active, user: $user, muted: $muted });
+    // R15: per-author sliding window of timestamps; updated synchronously with newMessage
+    const $spam = createStore<Map<string, number[]>>(new Map()).on(newMessage, (s, m) => {
+      const now = Date.now();
+      const next = new Map(s);
+      next.set(m.author.id, [...(next.get(m.author.id) ?? []).filter((t) => t >= now - 30_000), now]);
+      return next;
+    });
+
+    const $world = combine({ settings: $settings, active: $active, user: $user, muted: $muted, spam: $spam });
 
     // ───── outputs ───────────────────────────────────────────────────
     const showToast = createEvent<ToastPayload>();
@@ -61,13 +69,20 @@ export const effectorFactory: EngineFactory = {
       target: incrementBadge,
     });
 
-    // R6 gate predicate, factored out (reused for toast + sound)
+    // R6 + R15 gate predicate, factored out (reused for toast + sound)
     const shouldNotify = (
-      w: { settings: Settings | null; active: string | null; user: User | null; muted: ReadonlySet<string> },
+      w: {
+        settings: Settings | null;
+        active: string | null;
+        user: User | null;
+        muted: ReadonlySet<string>;
+        spam: Map<string, number[]>;
+      },
       m: Message,
     ): boolean => {
       if (!w.user || !w.settings) return false;
       if (m.author.id === w.user.id) return false;
+      if ((w.spam.get(m.author.id)?.length ?? 0) >= 5) return false; // R15
       if (m.channelId === w.active) return false;
       if (w.muted.has(m.channelId)) return false;
       if (!w.settings.notifications) return false;

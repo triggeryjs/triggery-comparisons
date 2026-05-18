@@ -1,35 +1,35 @@
 {
-  "measuredAt": "2026-05-17T23:48:49.646Z",
+  "measuredAt": "2026-05-18T00:14:29.789Z",
   "rows": [
     {
       "engine": "naked",
-      "minBytes": 1968,
-      "gzipBytes": 964
+      "minBytes": 2089,
+      "gzipBytes": 1022
     },
     {
       "engine": "reatom",
-      "minBytes": 8372,
-      "gzipBytes": 3552
+      "minBytes": 8482,
+      "gzipBytes": 3609
     },
     {
       "engine": "triggery",
-      "minBytes": 14459,
-      "gzipBytes": 5290
+      "minBytes": 14580,
+      "gzipBytes": 5349
     },
     {
       "engine": "effector",
-      "minBytes": 21632,
-      "gzipBytes": 9618
+      "minBytes": 21824,
+      "gzipBytes": 9688
     },
     {
       "engine": "rxjs",
-      "minBytes": 29426,
-      "gzipBytes": 9246
+      "minBytes": 29624,
+      "gzipBytes": 9326
     },
     {
       "engine": "rtk-listener",
-      "minBytes": 29633,
-      "gzipBytes": 11236
+      "minBytes": 29738,
+      "gzipBytes": 11294
     }
   ]
 }

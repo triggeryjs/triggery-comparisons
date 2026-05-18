@@ -62,6 +62,7 @@ export const createTriggeryFactory = (opts: { schedule?: 'microtask' | 'sync' } 
     let currentUser: User | null = null;
     let mutedChannels: ReadonlySet<string> = new Set();
     let previousConn: ConnectionState = 'connecting';
+    const spamWindow = new Map<string, number[]>(); // R15: per-author message timestamps
 
     const toast = output<[ToastPayload]>();
     const sound = output<[Sound]>();
@@ -94,6 +95,13 @@ export const createTriggeryFactory = (opts: { schedule?: 'microtask' | 'sync' } 
           const isMention = msg.mentions.includes(user.id);
           const isMuted = conditions.mutedChannels?.has(msg.channelId) ?? false;
           actions.incrementBadge?.({ channelId: msg.channelId, muted: isMuted });
+
+          // R15: 5+ messages from this author in last 30 s → suppress notification
+          const now = Date.now();
+          const times = (spamWindow.get(msg.author.id) ?? []).filter((t) => t >= now - 30_000);
+          times.push(now);
+          spamWindow.set(msg.author.id, times);
+          if (times.length >= 5) return;
 
           if (msg.channelId === conditions.activeChannelId) return;
           if (isMuted) return;
