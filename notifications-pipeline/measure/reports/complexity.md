@@ -3,8 +3,8 @@
 | engine       | cyclo | nesting | as | ! |
 |--------------|---:|---:|---:|---:|
 | rxjs         |    24 |       6 |  0 |  0 |
-| triggery     |    25 |       5 |  0 |  0 |
 | rtk-listener |    25 |       7 |  1 |  0 |
+| triggery     |    26 |       6 |  0 |  0 |
 | naked        |    29 |       7 |  0 |  0 |
 | effector     |    29 |       5 |  0 |  2 |
 | redux-saga   |    30 |       6 |  7 |  0 |

@@ -37,6 +37,11 @@ async function measure(engine) {
     treeShaking: true,
     legalComments: 'none',
     external: ['react', 'react-dom'],
+    // Resolve the "production" export condition so package.json `exports`
+    // maps like Triggery's serve their prod-stripped variant (no dev-warns).
+    // Mirrors what Vite/Webpack do in production mode.
+    conditions: ['production', 'module', 'import', 'browser', 'default'],
+    define: { 'process.env.NODE_ENV': '"production"' },
     logLevel: 'silent',
   });
   const blob = result.outputFiles[0].contents;

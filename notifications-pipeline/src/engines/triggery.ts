@@ -1,10 +1,10 @@
 // Triggery (v0.10) — two declarative triggers describe the orchestration.
-// Conditions live on the trigger config; setters push state in. Actions fan
-// out through built-in channels (t.action(name).subscribe). Typing tracker is
-// pure JS — pass-through events without gating need no trigger.
+// Conditions live on the trigger config; setters push state in. Outputs fan
+// out via `runtime.subscribeAction` — the lean main-bundle path, no builder
+// subpath, no per-action channel layer. Typing tracker is pure JS (events
+// without gating need no trigger).
 
-import { createRuntime } from '@triggery/core';
-import { createTrigger } from '@triggery/core/builder';
+import { createRuntime, createTrigger } from '@triggery/core';
 import type { Engine, EngineFactory } from '../engine';
 import type {
   ConnectionState,
@@ -19,9 +19,9 @@ import type {
 type Inbox = {
   events: { 'new-message': Message; 'channel-changed': string | null };
   conditions: {
-    settings: Settings;
+    settings: Settings | null;
     activeChannelId: string | null;
-    currentUser: User;
+    currentUser: User | null;
     mutedChannels: ReadonlySet<string>;
   };
   actions: {
@@ -45,7 +45,7 @@ export const createTriggeryFactory = (
   meta: {
     id: 'triggery',
     label: opts.schedule === 'sync' ? 'Triggery (fireSync)' : 'Triggery',
-    description: 'Two triggers, inline conditions, action channels. Handlers read like a spec.',
+    description: 'Two triggers + plain typing fan-out. Handlers read like a spec.',
     sourcePath: 'notifications-pipeline/src/engines/triggery.ts',
   },
   create(): Engine {
@@ -53,19 +53,14 @@ export const createTriggeryFactory = (
     const schedule = opts.schedule ?? 'microtask';
     const spamWindow = new Map<string, number[]>(); // R15: per-author timestamps
 
-    const inbox = createTrigger<Inbox>(runtime)
-      .id('inbox')
-      .events(['new-message', 'channel-changed'])
-      .conditions({
-        settings: null,
-        currentUser: null,
-        activeChannelId: null,
-        mutedChannels: new Set(),
-      })
-      .require('settings', 'currentUser')
-      .concurrency('take-every')
-      .schedule(schedule)
-      .handle(({ event, conditions, actions, check }) => {
+    const inbox = createTrigger<Inbox>({
+      id: 'inbox',
+      events: ['new-message', 'channel-changed'],
+      conditions: { settings: null, currentUser: null, activeChannelId: null, mutedChannels: new Set() },
+      required: ['settings', 'currentUser'],
+      concurrency: 'take-every',
+      schedule,
+      handler: ({ event, conditions, actions, check }) => {
         if (event.name === 'channel-changed') {
           const id = event.payload;
           if (id != null) {
@@ -75,8 +70,9 @@ export const createTriggeryFactory = (
           return;
         }
         const msg = event.payload;
-        if (msg.author.id === conditions.currentUser.id) return;
-        const isMention = msg.mentions.includes(conditions.currentUser.id);
+        const user = conditions.currentUser;
+        if (!user || msg.author.id === user.id) return;
+        const isMention = msg.mentions.includes(user.id);
         const isMuted = conditions.mutedChannels?.has(msg.channelId) ?? false;
         actions.incrementBadge?.({ channelId: msg.channelId, muted: isMuted });
 
@@ -104,15 +100,16 @@ export const createTriggeryFactory = (
           emittedAt: msg.emittedAt,
         });
         actions.debounce(600).playSound?.(isMention ? 'mention' : 'beep');
-      });
+      },
+    }, runtime);
 
-    const conn = createTrigger<Conn>(runtime)
-      .id('conn')
-      .events(['connection-changed'])
-      .conditions({ previous: 'connecting' })
-      .require('previous')
-      .schedule(schedule)
-      .handle(({ event, conditions, actions }) => {
+    const conn = createTrigger<Conn>({
+      id: 'conn',
+      events: ['connection-changed'],
+      conditions: { previous: 'connecting' },
+      required: ['previous'],
+      schedule,
+      handler: ({ event, conditions, actions }) => {
         const next = event.payload;
         if (next === conditions.previous) return;
         if (next === 'disconnected') {
@@ -121,7 +118,8 @@ export const createTriggeryFactory = (
           actions.showToast?.(systemToast('Reconnected', ''));
           actions.playSound?.('reconnect');
         }
-      });
+      },
+    }, runtime);
 
     // Typing tracker: pure pass-through, no gating → no trigger.
     const typingByChannel = new Map<string, Set<string>>();
@@ -133,6 +131,10 @@ export const createTriggeryFactory = (
       const update = { channelId, userIds: [...set] };
       for (const cb of typingSubs) cb(update);
     };
+
+    // Lean fan-out: subscribe to each trigger's action through the runtime.
+    const on = (id: string, name: string, cb: (p: unknown) => void) =>
+      runtime.subscribeAction(id, name, cb).unregister;
 
     return {
       fireMessage: (m) => runtime.fire('new-message', m),
@@ -148,20 +150,23 @@ export const createTriggeryFactory = (
       setCurrentUser: (u) => inbox.setCondition('currentUser', u),
       setMutedChannels: (ids) => inbox.setCondition('mutedChannels', ids),
       onShowToast: (cb) => {
-        const a = inbox.action('showToast').subscribe(cb);
-        const b = conn.action('showToast').subscribe(cb);
+        const a = on('inbox', 'showToast', cb as (p: unknown) => void);
+        const b = on('conn', 'showToast', cb as (p: unknown) => void);
         return () => { a(); b(); };
       },
       onPlaySound: (cb) => {
-        const a = inbox.action('playSound').subscribe(cb);
-        const b = conn.action('playSound').subscribe(cb);
+        const a = on('inbox', 'playSound', cb as (p: unknown) => void);
+        const b = on('conn', 'playSound', cb as (p: unknown) => void);
         return () => { a(); b(); };
       },
       onIncrementBadge: (cb) =>
-        inbox.action('incrementBadge').subscribe((p) => cb(p.channelId, p.muted)),
-      onClearBadge: (cb) => inbox.action('clearBadge').subscribe(cb),
+        on('inbox', 'incrementBadge', (p) => {
+          const { channelId, muted } = p as { channelId: string; muted: boolean };
+          cb(channelId, muted);
+        }),
+      onClearBadge: (cb) => on('inbox', 'clearBadge', cb as (p: unknown) => void),
       onTypingChange: (cb) => (typingSubs.add(cb), () => typingSubs.delete(cb)),
-      onMarkChannelRead: (cb) => inbox.action('markRead').subscribe(cb),
+      onMarkChannelRead: (cb) => on('inbox', 'markRead', cb as (p: unknown) => void),
       dispose: () => runtime.dispose(),
     };
   },

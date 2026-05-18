@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T05:35:42.109Z",
+  "measuredAt": "2026-05-18T05:47:20.439Z",
   "rows": [
     {
       "engine": "naked",
@@ -8,8 +8,8 @@
     },
     {
       "engine": "triggery",
-      "loc": 160,
-      "bytes": 6827
+      "loc": 162,
+      "bytes": 7190
     },
     {
       "engine": "reatom",
