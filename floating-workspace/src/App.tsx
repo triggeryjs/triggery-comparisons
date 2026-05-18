@@ -54,6 +54,7 @@ export function App() {
     <>
       <EngineBar engine={engine} currentId={engineId} snap={snap} />
       <div className={wsClass}>
+        <HeroBar engine={engine} hasPanels={Object.keys(snap.panels).length > 0} />
         {snap.zOrder.map((id, i) => {
           const p = snap.panels[id];
           if (!p) return null;
@@ -74,12 +75,13 @@ export function App() {
 }
 
 function EngineBar({
-  engine, currentId, snap,
+  engine: _engine, currentId, snap,
 }: { engine: Engine; currentId: string; snap: WorkspaceSnapshot }) {
+  void _engine;
   const panelCount = Object.keys(snap.panels).length;
   return (
     <div className="engine-bar">
-      <span className="label">Floating workspace · {ENGINE_LIST.length} engines</span>
+      <span className="label">Floating workspace · engine:</span>
       {ENGINE_LIST.map((e) => (
         <a
           key={e.meta.id}
@@ -90,15 +92,52 @@ function EngineBar({
           {e.meta.label}
         </a>
       ))}
-      <span className="hint" style={{ marginRight: 12 }}>{panelCount}/5 panels</span>
-      <button className="toolbar-btn" onClick={() => engine.openPanel('note')}>+ Note</button>
-      <button className="toolbar-btn" onClick={() => engine.openPanel('inspector')}>+ Inspector</button>
-      <button className="toolbar-btn" onClick={() => engine.openCommandPalette(COMMAND_PALETTE_COMMANDS)}>
-        <kbd style={{ fontSize: 11, marginRight: 4 }}>⌘K</kbd> commands
-      </button>
-      <span className="hint">
-        <kbd>⌘W</kbd> close · <kbd>Esc</kbd> dismiss · drag title · drag bottom-right
-      </span>
+      <span className="hint">{panelCount}/5 panels · <kbd>⌘W</kbd> close · <kbd>Esc</kbd> dismiss · drag title · drag bottom-right</span>
+    </div>
+  );
+}
+
+function HeroBar({ engine, hasPanels }: { engine: Engine; hasPanels: boolean }) {
+  return (
+    <div className={`hero-bar ${hasPanels ? 'is-compact' : 'is-empty'}`}>
+      {!hasPanels && (
+        <p className="hero-tagline">
+          Open windows, drag them around, resize from the corner.<br />
+          Hit <kbd>⌘K</kbd> to run a command.
+        </p>
+      )}
+      <div className="hero-actions">
+        <button
+          className="hero-btn primary"
+          onClick={() => engine.openPanel('note')}
+        >
+          <span className="hero-btn-glyph">📝</span>
+          <span>
+            New note
+            <small>editable text</small>
+          </span>
+        </button>
+        <button
+          className="hero-btn"
+          onClick={() => engine.openPanel('inspector')}
+        >
+          <span className="hero-btn-glyph">🔍</span>
+          <span>
+            New inspector
+            <small>structured info</small>
+          </span>
+        </button>
+        <button
+          className="hero-btn"
+          onClick={() => engine.openCommandPalette(COMMAND_PALETTE_COMMANDS)}
+        >
+          <span className="hero-btn-glyph">⌘K</span>
+          <span>
+            Command palette
+            <small>run any command</small>
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -147,11 +186,49 @@ function Panel({
             placeholder="Start typing…"
           />
         ) : (
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', font: 'inherit' }}>{panel.body}</pre>
+          <InspectorView body={panel.body} />
         )}
       </div>
       <div className="resize-handle" onPointerDown={handleResizePointer} />
     </div>
+  );
+}
+
+function InspectorView({ body }: { body: string }) {
+  // Inspector body is JSON; render as a key/value property list.
+  // Falls back to raw text if it doesn't parse (e.g. user edited via DevTools).
+  let data: Record<string, unknown> | null = null;
+  try {
+    data = JSON.parse(body) as Record<string, unknown>;
+  } catch {
+    // ignore
+  }
+  if (!data || typeof data !== 'object') {
+    return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', font: 'inherit' }}>{body}</pre>;
+  }
+  return (
+    <dl className="inspector">
+      {Object.entries(data).map(([k, v]) => (
+        <div className="row" key={k}>
+          <dt>{k}</dt>
+          <dd>
+            {typeof v === 'boolean' ? (
+              <span className={`pill ${v ? 'ok' : 'off'}`}>{v ? 'true' : 'false'}</span>
+            ) : Array.isArray(v) ? (
+              <div className="tags">
+                {v.map((tag, i) => (
+                  <span className="tag" key={i}>{String(tag)}</span>
+                ))}
+              </div>
+            ) : v !== null && typeof v === 'object' ? (
+              <code>{JSON.stringify(v)}</code>
+            ) : (
+              <span>{String(v)}</span>
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

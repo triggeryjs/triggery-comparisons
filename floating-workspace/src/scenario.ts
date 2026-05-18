@@ -47,9 +47,26 @@ export function defaultTitle(kind: PanelKind): string {
 }
 
 export function defaultBody(kind: PanelKind): string {
-  return kind === 'note'
-    ? 'Click to edit. Drag the title bar to move, bottom-right corner to resize.'
-    : 'Read-only panel. Useful as a sidebar / status board / live preview.';
+  if (kind === 'note') {
+    return 'Click to edit. Drag the title bar to move, bottom-right corner to resize.';
+  }
+  // Inspector — JSON-shaped structured data the UI renders as a property list
+  // instead of a plain string.
+  const id = openCounter.toString(36).toUpperCase();
+  return JSON.stringify(
+    {
+      Type: 'Selection',
+      Id: `obj_${id}`,
+      Name: `Element ${openCounter}`,
+      Position: { x: 24, y: 56 },
+      Size: { w: 320, h: 240 },
+      Visible: true,
+      Tags: ['draft', 'shared'],
+      Modified: new Date().toISOString().slice(0, 16).replace('T', ' '),
+    },
+    null,
+    2,
+  );
 }
 
 let idCounter = 0;

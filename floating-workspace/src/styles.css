@@ -55,6 +55,70 @@ body { display: flex; flex-direction: column; }
 .workspace.is-dragging { cursor: grabbing; user-select: none; }
 .workspace.is-resizing { cursor: nwse-resize; user-select: none; }
 
+/* Hero action bar — primary functionality of the prototype, placed
+   prominently. Centered when workspace is empty; collapses to a compact
+   pill in the top-center when panels are open. */
+.hero-bar {
+  position: absolute;
+  left: 50%; transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+}
+.hero-bar > * { pointer-events: auto; }
+.hero-bar.is-empty {
+  top: 18%;
+  display: flex; flex-direction: column; align-items: center; gap: 22px;
+  width: min(720px, 90vw);
+}
+.hero-bar.is-compact {
+  top: 12px;
+}
+.hero-bar.is-compact .hero-actions {
+  background: rgba(21,23,28,0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px;
+  box-shadow: var(--shadow);
+}
+.hero-bar.is-compact .hero-btn {
+  padding: 8px 14px;
+  border-radius: 999px;
+  min-height: 36px;
+  background: transparent;
+  border: none;
+}
+.hero-bar.is-compact .hero-btn span { display: none; }
+.hero-bar.is-compact .hero-btn span:first-child { display: inline-flex; }
+.hero-bar.is-compact .hero-btn-glyph { font-size: 16px; }
+.hero-bar.is-compact .hero-btn:hover { background: rgba(167,139,250,0.12); }
+
+.hero-tagline {
+  margin: 0; text-align: center; color: var(--muted); font-size: 15px; line-height: 1.7;
+}
+.hero-tagline kbd {
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 1px 6px; font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+}
+.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.hero-btn {
+  display: inline-flex; align-items: center; gap: 12px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: inherit; font: inherit;
+  cursor: pointer; transition: 100ms;
+  text-align: left;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+}
+.hero-btn:hover { border-color: var(--accent); background: rgba(167,139,250,0.08); transform: translateY(-1px); }
+.hero-btn.primary { border-color: var(--accent); background: rgba(167,139,250,0.16); }
+.hero-btn-glyph { font-size: 24px; line-height: 1; }
+.hero-btn span { display: flex; flex-direction: column; }
+.hero-btn span small { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
 .panel {
   position: absolute;
   background: #1f2230;
@@ -95,7 +159,36 @@ body { display: flex; flex-direction: column; }
   width: 100%; height: 100%; background: transparent; border: none; outline: none;
   color: inherit; font: inherit; resize: none;
 }
-.panel.kind-inspector .body { color: var(--muted); }
+/* Inspector panel — visually distinct from note: greener tint, structured
+   property-list rendering, smaller mono font for values. */
+.panel.kind-inspector { background: linear-gradient(180deg, #1c2a26, #1a2522); border-color: #2e4a40; }
+.panel.kind-inspector.is-focused { border-color: var(--accent-2); box-shadow: 0 18px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(52,211,153,0.5); }
+.panel.kind-inspector .title-bar { background: linear-gradient(180deg, #243630, #1c2a26); border-bottom-color: #2e4a40; }
+.panel.kind-inspector.is-focused .title-bar { background: linear-gradient(180deg, rgba(52,211,153,0.2), rgba(52,211,153,0.05)); }
+.panel.kind-inspector .kind-chip { color: var(--accent-2); border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.08); }
+.panel.kind-inspector .body { padding: 0; }
+
+.inspector { margin: 0; font-size: 12px; }
+.inspector .row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid rgba(46,74,64,0.4);
+}
+.inspector .row:last-child { border-bottom: none; }
+.inspector dt { color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; align-self: center; }
+.inspector dd { margin: 0; font-family: ui-monospace, SFMono-Regular, 'Menlo', monospace; color: #e6e7eb; word-break: break-word; }
+.inspector dd code { font: inherit; background: rgba(255,255,255,0.04); padding: 1px 6px; border-radius: 4px; }
+.inspector .pill {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.inspector .pill.ok { background: rgba(52,211,153,0.16); color: var(--accent-2); }
+.inspector .pill.off { background: rgba(248,113,113,0.16); color: var(--danger); }
+.inspector .tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.inspector .tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: rgba(167,139,250,0.16); color: var(--accent);
+  border: 1px solid rgba(167,139,250,0.32);
+}
 .panel .resize-handle {
   position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
   cursor: nwse-resize;
