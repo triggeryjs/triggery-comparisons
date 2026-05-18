@@ -1,9 +1,20 @@
 // Triggery — single `workspace` trigger with one `mutate(fn)` event applies
-// a reducer to closure state. `actions.debounce(1000).persist?.(s)` is the
-// declarative one-liner for layout-persist. Pointer-move uses a closure
-// throttle at the call site — the trigger pipeline is overkill for a 60 fps
-// stream where 997/1000 events get dropped (and the 3 that survive go
-// through `mutate(fn)` like everything else).
+// a reducer to closure state. The trigger dispatches every user-driven
+// transition (open / close / focus / setBody / arrange / split / mode toggle
+// / etc) and the handler fires `actions.debounce(1000).persist?.(state)` —
+// declarative one-liner for layout-persist.
+//
+// Three transient methods bypass the trigger and write state directly:
+//   - `pointerMove` — closure-throttled to 16 ms, mutates state inline
+//   - `setCursor`   — global mouse tracker; cursor isn't persisted
+//   - `setTileDropTarget` — drag-tiled hover state, reset on pointer-up
+//
+// These are 60 fps streams of transient state. Passing them through the
+// trigger would (a) schedule a persist write per pointer-move (semantically
+// wrong — mid-drag positions shouldn't hit localStorage), and (b) pay the
+// `runtime.fire` cost 3× per drag burst for state that no other engine
+// methods need to react to. `pointerUp` always re-enters via `mutate`, so
+// persist still fires after the gesture settles.
 
 import { createRuntime, createTrigger } from '@triggery/core';
 import type { Engine, EngineFactory } from '../engine';
@@ -61,7 +72,7 @@ export const triggeryFactory: EngineFactory = {
   meta: {
     id: 'triggery',
     label: 'Triggery',
-    description: 'Single trigger, mutate(fn) event; actions.debounce(1000).persist declarative.',
+    description: 'Single trigger, mutate(fn); actions.debounce(1000).persist; transient streams bypass to direct mutate.',
     sourcePath: 'floating-workspace/src/engines/triggery.ts',
   },
   create(): Engine {
@@ -71,13 +82,15 @@ export const triggeryFactory: EngineFactory = {
     const resolvers = new Map<string, (r: unknown) => void>();
     let lastMove = 0;
 
+    const emit = () => { for (const cb of subs) cb(state); };
+
     createTrigger<{ events: { mutate: { fn: (s: WS) => WS } }; actions: { persist: WS } }>({
       id: 'workspace',
       events: ['mutate'],
       schedule: 'sync',
       handler: ({ event, actions }) => {
         state = event.payload.fn(state);
-        for (const cb of subs) cb(state);
+        emit();
         actions.debounce(PERSIST_DEBOUNCE_MS).persist?.(state);
       },
     }, runtime);
@@ -243,18 +256,21 @@ export const triggeryFactory: EngineFactory = {
         });
       },
       pointerMove(px, py) {
+        // Transient stream — bypass trigger (no persist, no subscribeAction
+        // would care about mid-drag positions). Closure-throttled to 16 ms.
         if (!state.interaction) return;
         const now = performance.now();
         if (now - lastMove < POINTER_THROTTLE_MS) return;
         lastMove = now;
-        mutate((s) => applyMove(s, px, py));
+        state = applyMove(state, px, py);
+        emit();
       },
       setTileDropTarget(leafId, zone) {
-        mutate((s) => {
-          const i = s.interaction;
-          if (i?.kind !== 'drag-tiled' || (i.targetLeafId === leafId && i.targetZone === zone)) return s;
-          return { ...s, interaction: { ...i, targetLeafId: leafId, targetZone: zone } };
-        });
+        // Transient — drop-target is reset on pointer-up; not persisted.
+        const i = state.interaction;
+        if (i?.kind !== 'drag-tiled' || (i.targetLeafId === leafId && i.targetZone === zone)) return;
+        state = { ...state, interaction: { ...i, targetLeafId: leafId, targetZone: zone } };
+        emit();
       },
       pointerUp() {
         const i = state.interaction;
@@ -269,8 +285,10 @@ export const triggeryFactory: EngineFactory = {
         mutate((s) => ({ ...s, interaction: null }));
       },
       setCursor(x, y, overPanelId) {
+        // Transient — cursor isn't persisted; bypass to avoid persist write.
         if (state.cursor.x === x && state.cursor.y === y && state.cursor.overPanelId === overPanelId) return;
-        mutate((s) => ({ ...s, cursor: { x, y, overPanelId } }));
+        state = { ...state, cursor: { x, y, overPanelId } };
+        emit();
       },
       onKey({ key, meta, ctrl }) {
         const mod = meta || ctrl;

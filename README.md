@@ -60,15 +60,15 @@ Two scenarios shipped so far. They probe different shapes of the same problem sp
 
 | axis | leader | triggery |
 |---|---|---|
-| **LOC** | redux-thunk — 168 *(+ 202 shared slice)* | **best non-redux** (293 — single file) |
+| **LOC** | redux-thunk — 168 *(+ 202 shared slice)* | **best non-redux** (295 — single file) |
 | **API surface** | **triggery / effector — 2 symbols** *(tied)* | **1st** *(tied)* |
-| **Bundle (gzipped)** | naked — 4.21 KB | 3rd (8.04 KB — beats redux trio + rxjs + xstate) |
+| **Bundle (gzipped)** | naked — 4.25 KB | 3rd (8.13 KB — beats redux trio + rxjs + xstate) |
 | **Dependency footprint** | naked — 0 packages | **tied 2nd** *(1 package)* |
-| **Drag throughput** | naked — 10.5M ev/sec *(throttle-honoring)* | 6th (2.07M — closure-throttle at call site) |
-| **Latency p50** | naked — 0.58 µs | 4th (3.1 µs) |
+| **Drag throughput** | naked — 10.6M ev/sec *(throttle-honoring)* | 6th (2.26M — closure-throttle + transient-stream bypass) |
+| **Latency p50** | naked — 0.54 µs | 4th (3.1 µs) |
 | **Cyclomatic complexity** | redux-saga — 32 *(slice excluded)* | **best non-redux** (88) |
 
-> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it now wins single-file LOC (293) and cyclomatic (88) among non-redux engines**, plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. The trio of redux engines look small per-file only because they share a 202-LOC slice — count both files and they land at ≈ 370, above triggery. Drag throughput jumped from 269k → 2.07M ev/sec after moving the pointer-move gate from `actions.throttle` (inside the trigger handler) to a closure-throttle at the call site — `runtime.fire` is great for ad-hoc actions, but you don't want it on a path that's about to drop 99.7% of events anyway. **Each scenario rewards a different mental model — that's the point.**
+> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it wins single-file LOC (295) and cyclomatic (88) among non-redux engines**, plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. The trio of redux engines look small per-file only because they share a 202-LOC slice — count both files and they land at ≈ 370, above triggery. Drag throughput climbed 269k → 2.07M → 2.26M ev/sec across two passes: (1) closure-throttle at the call site instead of `actions.throttle` inside the trigger handler, then (2) the three transient-stream methods (`pointerMove`, `setCursor`, `setTileDropTarget`) bypass `runtime.fire('mutate')` entirely — direct state assign + emit. The bypass is semantically correct (those three update state nothing else reacts to and shouldn't trigger persist), not just faster. **Each scenario rewards a different mental model — that's the point.**
 
 ## What we measure
 

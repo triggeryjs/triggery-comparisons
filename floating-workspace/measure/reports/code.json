@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T09:44:02.266Z",
+  "measuredAt": "2026-05-18T10:19:36.683Z",
   "rows": [
     {
       "engine": "naked",
@@ -22,7 +22,7 @@
       "primitivesTotal": 1,
       "cyclo": 65,
       "nesting": 5,
-      "asCasts": 2,
+      "asCasts": 1,
       "nonNull": 3
     },
     {
@@ -36,7 +36,7 @@
       "primitivesTotal": 26,
       "cyclo": 94,
       "nesting": 7,
-      "asCasts": 2,
+      "asCasts": 1,
       "nonNull": 3
     },
     {
@@ -50,7 +50,7 @@
       "primitivesTotal": 2,
       "cyclo": 88,
       "nesting": 8,
-      "asCasts": 3,
+      "asCasts": 2,
       "nonNull": 4
     },
     {
@@ -65,7 +65,7 @@
       "primitivesTotal": 3,
       "cyclo": 94,
       "nesting": 9,
-      "asCasts": 2,
+      "asCasts": 1,
       "nonNull": 3
     },
     {
@@ -101,7 +101,7 @@
       "primitivesTotal": 0,
       "cyclo": 92,
       "nesting": 11,
-      "asCasts": 2,
+      "asCasts": 1,
       "nonNull": 3
     },
     {
@@ -129,7 +129,7 @@
       "primitivesTotal": 7,
       "cyclo": 116,
       "nesting": 7,
-      "asCasts": 2,
+      "asCasts": 1,
       "nonNull": 3
     }
   ]
