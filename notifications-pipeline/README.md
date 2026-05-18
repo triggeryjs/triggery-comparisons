@@ -199,6 +199,44 @@ We measured the **incremental cost** of adding the spam-protection rule (R15) on
 
 **This is the headline maintenance metric.** Graph-shaped libraries (rxjs, effector) pay a "graph extension tax" — every new state means a new store/stream, and every place that reads it must be updated. Handler-shaped libraries (triggery, naked, reatom, rtk) only pay for the new line. **Triggery scales identically to the no-library baseline** — `+6` LOC for a real new rule with state + time-window + decision-from-history.
 
+### Dependency footprint
+
+Unique npm packages each engine actually pulls into a production bundle (esbuild metafile, walked transitively, `react`/`react-dom` externalised). This is the honest "what does adding this library cost my node_modules" answer.
+
+| engine | packages | list |
+|---|---:|---|
+| naked        | 0 | _(none — pure JS)_ |
+| **triggery** | **1** | `@triggery/core` |
+| effector     | 1 | `effector` |
+| reatom       | 1 | `@reatom/core` |
+| rxjs         | 2 | `rxjs`, `tslib` |
+| rtk-listener | 5 | `@reduxjs/toolkit`, `immer`, `redux`, `redux-thunk`, `reselect` |
+| redux-thunk  | 5 | `@reduxjs/toolkit`, `immer`, `redux`, `redux-thunk`, `reselect` |
+| redux-saga   | 12 | `@babel/runtime`, `@redux-saga/{core,deferred,delay-p,is,symbols}`, `@reduxjs/toolkit`, `immer`, `redux`, `redux-saga`, `redux-thunk`, `reselect` |
+
+`@triggery/core` ties effector and reatom for the smallest "1 package" footprint. The full Redux family ships at least 5 — `@reduxjs/toolkit` brings `immer` + `redux` + `redux-thunk` + `reselect` along whether you use them or not. Saga is dramatically heavier — 12 packages — because the saga runtime is split across half-a-dozen `@redux-saga/*` subpackages plus `@babel/runtime` for generator helpers.
+
+### Mental load — subjective notes
+
+Four axes per engine. The first column ("concepts") is the same number as in the API-surface table above, mapped to a colour band; the other three are honest opinion grounded in this scenario's per-engine notes (see below). 🟢 light · 🟡 medium · 🔴 heavy.
+
+| engine | concepts | spec ↔ code | debug tooling | onboarding | summary |
+|---|---|---|---|---|---|
+| naked | 🟢 0 | 🟡 closures + `setTimeout` | 🟡 just `console.log` | 🟢 instant | 🟢 light |
+| **triggery** | 🟢 2 | 🟢 handler reads as the R1-R15 spec | 🟡 `@triggery/core/inspect` exists, basic | 🟢 hours | 🟢 light |
+| reatom | 🟢 3 | 🟡 logic scattered across atoms / actions | 🟡 reatom-devtools (basic) | 🟢 days | 🟢 light |
+| effector | 🟡 5 | 🟡 graph requires assembly | 🟢 effector-inspector + Redux DevTools bridge | 🟡 days | 🟡 medium |
+| rtk-listener | 🟡 5 | 🟢 reads as a listener registry | 🟢 Redux DevTools + time travel | 🟢 hours (if RTK-familiar) | 🟡 medium |
+| redux-thunk | 🟡 7 | 🟡 imperative branches in thunks | 🟢 Redux DevTools | 🟢 hours | 🟡 medium |
+| redux-saga | 🔴 17 | 🟡 generator effects | 🟢 Redux DevTools + saga-monitor | 🟡 days (generators) | 🔴 heavy |
+| rxjs | 🔴 15 | 🟡 marble diagrams (if you know them) | 🔴 deep operator stacks, no first-class inspector | 🔴 weeks (marble model) | 🔴 heavy |
+
+Honest caveats — what the table doesn't capture:
+
+- **Triggery's debuggability is a real weak point**, not just a quibble. `@triggery/core/inspect` exists as a subpath but it's basic — no time-travel, no graph visualizer, no Redux-DevTools-class polish yet. This is a roadmap item.
+- **rxjs's debug 🔴** — operator-pipeline stack traces are deep and require `tap(console.log)` to introspect intermediate values. There's no inspector that shows "the current value flowing through Subject X", short of writing one yourself.
+- **redux-saga's `Generator` ergonomics** are easier than they look once you stop fighting them — `yield call(api)` reads almost exactly like `await api()`. The 🔴 summary is more about the 17-symbol vocabulary than the generators themselves.
+
 <!-- END: measurements -->
 
 ## How to read these numbers

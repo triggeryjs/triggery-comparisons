@@ -1,0 +1,79 @@
+{
+  "measuredAt": "2026-05-18T07:00:01.298Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "packages": [],
+      "count": 0
+    },
+    {
+      "engine": "triggery",
+      "packages": [
+        "@triggery/core"
+      ],
+      "count": 1
+    },
+    {
+      "engine": "effector",
+      "packages": [
+        "effector"
+      ],
+      "count": 1
+    },
+    {
+      "engine": "reatom",
+      "packages": [
+        "@reatom/core"
+      ],
+      "count": 1
+    },
+    {
+      "engine": "rxjs",
+      "packages": [
+        "rxjs",
+        "tslib"
+      ],
+      "count": 2
+    },
+    {
+      "engine": "rtk-listener",
+      "packages": [
+        "@reduxjs/toolkit",
+        "immer",
+        "redux",
+        "redux-thunk",
+        "reselect"
+      ],
+      "count": 5
+    },
+    {
+      "engine": "redux-thunk",
+      "packages": [
+        "@reduxjs/toolkit",
+        "immer",
+        "redux",
+        "redux-thunk",
+        "reselect"
+      ],
+      "count": 5
+    },
+    {
+      "engine": "redux-saga",
+      "packages": [
+        "@babel/runtime",
+        "@redux-saga/core",
+        "@redux-saga/deferred",
+        "@redux-saga/delay-p",
+        "@redux-saga/is",
+        "@redux-saga/symbols",
+        "@reduxjs/toolkit",
+        "immer",
+        "redux",
+        "redux-saga",
+        "redux-thunk",
+        "reselect"
+      ],
+      "count": 12
+    }
+  ]
+}

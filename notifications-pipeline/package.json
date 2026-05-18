@@ -11,8 +11,9 @@
     "measure:loc": "node measure/loc.mjs",
     "measure:bundle": "node measure/bundle.mjs",
     "measure:code": "node measure/code.mjs",
+    "measure:deps": "node measure/deps.mjs",
     "measure:perf": "tsx measure/perf.ts",
-    "measure": "pnpm run measure:loc && pnpm run measure:bundle && pnpm run measure:code && pnpm run measure:perf"
+    "measure": "pnpm run measure:loc && pnpm run measure:bundle && pnpm run measure:code && pnpm run measure:deps && pnpm run measure:perf"
   },
   "dependencies": {
     "@reatom/core": "^3.10.3",

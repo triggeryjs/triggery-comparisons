@@ -1,7 +1,7 @@
 | engine | LOC | bytes |
 |---|---:|---:|
+| triggery     |  190 |  9189 |
 | naked        |  196 |  6892 |
-| triggery     |  219 |  9524 |
 | reatom       |  230 |  8252 |
 | redux-saga   |  249 |  9361 |
 | effector     |  250 | 10656 |
