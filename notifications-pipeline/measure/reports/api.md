@@ -7,4 +7,6 @@
 | reatom       |       1 |       3 |         17 | atom×5, action×11, createCtx×1 |
 | effector     |       1 |       5 |         36 | createEvent×15, createStore×8, createEffect×3, sample×9, combine×1 |
 | rtk-listener |       1 |       5 |         23 | createAction×11, createSlice×1, createListenerMiddleware×1, startListening×10 |
+| redux-thunk  |       1 |       7 |          7 | createAction×6, createSlice×1 |
 | rxjs         |       1 |      15 |         27 | Subject×10, BehaviorSubject×5, .pipe(×12 |
+| redux-saga   |       3 |      17 |         12 | createAction×11, createSlice×1 |

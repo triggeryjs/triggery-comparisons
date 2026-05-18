@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T05:17:56.940Z",
+  "measuredAt": "2026-05-18T05:35:42.109Z",
   "rows": [
     {
       "engine": "naked",
@@ -8,8 +8,8 @@
     },
     {
       "engine": "triggery",
-      "loc": 155,
-      "bytes": 6740
+      "loc": 160,
+      "bytes": 6827
     },
     {
       "engine": "reatom",
@@ -27,9 +27,19 @@
       "bytes": 8335
     },
     {
+      "engine": "redux-thunk",
+      "loc": 215,
+      "bytes": 9056
+    },
+    {
       "engine": "rtk-listener",
       "loc": 229,
       "bytes": 9368
+    },
+    {
+      "engine": "redux-saga",
+      "loc": 264,
+      "bytes": 11081
     }
   ]
 }

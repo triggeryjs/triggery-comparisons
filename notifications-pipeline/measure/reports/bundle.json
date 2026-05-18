@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T05:17:57.442Z",
+  "measuredAt": "2026-05-18T05:36:01.108Z",
   "rows": [
     {
       "engine": "naked",
@@ -17,9 +17,14 @@
       "gzipBytes": 9688
     },
     {
+      "engine": "redux-thunk",
+      "minBytes": 25412,
+      "gzipBytes": 9790
+    },
+    {
       "engine": "triggery",
-      "minBytes": 26162,
-      "gzipBytes": 5951
+      "minBytes": 26194,
+      "gzipBytes": 5963
     },
     {
       "engine": "rxjs",
@@ -30,6 +35,11 @@
       "engine": "rtk-listener",
       "minBytes": 29738,
       "gzipBytes": 11294
+    },
+    {
+      "engine": "redux-saga",
+      "minBytes": 43313,
+      "gzipBytes": 16046
     }
   ]
 }

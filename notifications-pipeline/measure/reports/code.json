@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T05:17:57.705Z",
+  "measuredAt": "2026-05-18T05:35:42.859Z",
   "rows": [
     {
       "engine": "naked",
@@ -78,6 +78,20 @@
       "nonNull": 0
     },
     {
+      "engine": "redux-thunk",
+      "importedSources": 1,
+      "importedSymbols": 7,
+      "primitives": {
+        "createAction": 6,
+        "createSlice": 1
+      },
+      "primitivesTotal": 7,
+      "cyclo": 33,
+      "nesting": 6,
+      "asCasts": 2,
+      "nonNull": 0
+    },
+    {
       "engine": "rxjs",
       "importedSources": 1,
       "importedSymbols": 15,
@@ -90,6 +104,20 @@
       "cyclo": 24,
       "nesting": 6,
       "asCasts": 0,
+      "nonNull": 0
+    },
+    {
+      "engine": "redux-saga",
+      "importedSources": 3,
+      "importedSymbols": 17,
+      "primitives": {
+        "createAction": 11,
+        "createSlice": 1
+      },
+      "primitivesTotal": 12,
+      "cyclo": 30,
+      "nesting": 6,
+      "asCasts": 7,
       "nonNull": 0
     }
   ]

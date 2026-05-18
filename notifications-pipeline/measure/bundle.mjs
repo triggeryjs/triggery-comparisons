@@ -13,7 +13,16 @@ const enginesDir = resolve(__dirname, '../src/engines');
 const reportsDir = resolve(__dirname, 'reports');
 mkdirSync(reportsDir, { recursive: true });
 
-const engines = ['triggery', 'effector', 'rxjs', 'reatom', 'rtk-listener', 'naked'];
+const engines = [
+  'triggery',
+  'effector',
+  'rxjs',
+  'reatom',
+  'rtk-listener',
+  'redux-thunk',
+  'redux-saga',
+  'naked',
+];
 
 async function measure(engine) {
   const entry = join(enginesDir, `${engine}.ts`);

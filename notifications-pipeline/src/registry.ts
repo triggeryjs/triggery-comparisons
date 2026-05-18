@@ -2,6 +2,8 @@ import type { EngineFactory, EngineId } from './engine';
 import { effectorFactory } from './engines/effector';
 import { nakedFactory } from './engines/naked';
 import { reatomFactory } from './engines/reatom';
+import { reduxSagaFactory } from './engines/redux-saga';
+import { reduxThunkFactory } from './engines/redux-thunk';
 import { rtkListenerFactory } from './engines/rtk-listener';
 import { rxjsFactory } from './engines/rxjs';
 import { triggeryFactory } from './engines/triggery';
@@ -12,6 +14,8 @@ export const ENGINES: Record<EngineId, EngineFactory> = {
   rxjs: rxjsFactory,
   reatom: reatomFactory,
   rtk: rtkListenerFactory,
+  'redux-thunk': reduxThunkFactory,
+  'redux-saga': reduxSagaFactory,
   naked: nakedFactory,
 };
 
@@ -21,6 +25,8 @@ export const ENGINE_LIST: readonly EngineFactory[] = [
   rxjsFactory,
   reatomFactory,
   rtkListenerFactory,
+  reduxThunkFactory,
+  reduxSagaFactory,
   nakedFactory,
 ];
 

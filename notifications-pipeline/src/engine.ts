@@ -47,7 +47,15 @@ export interface Engine {
   dispose(): void;
 }
 
-export type EngineId = 'triggery' | 'effector' | 'rxjs' | 'reatom' | 'rtk' | 'naked';
+export type EngineId =
+  | 'triggery'
+  | 'effector'
+  | 'rxjs'
+  | 'reatom'
+  | 'rtk'
+  | 'redux-thunk'
+  | 'redux-saga'
+  | 'naked';
 
 export interface EngineMeta {
   id: EngineId;
