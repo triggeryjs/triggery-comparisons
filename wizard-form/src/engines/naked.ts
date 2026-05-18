@@ -6,10 +6,14 @@ import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import {
   DRAFT_DEBOUNCE_MS,
   EMAIL_DEBOUNCE_MS,
+  REFERRAL_DEBOUNCE_MS,
   STORAGE_KEY,
+  USERNAME_DEBOUNCE_MS,
   checkEmailAvailable,
+  checkUsernameAvailable,
   emptyData,
   initialSnapshot,
+  lookupReferralCode,
   nextStep,
   prevStep,
   progressFor,
@@ -22,15 +26,19 @@ export const nakedFactory: EngineFactory = {
   meta: {
     id: 'naked',
     label: 'Naked baseline',
-    description: 'Plain JS — mutable state, Set of subscribers, hand-rolled timers.',
+    description: 'Plain JS — mutable state, Set of subscribers, hand-rolled timers (×3 async).',
     sourcePath: 'wizard-form/src/engines/naked.ts',
   },
   create(): Engine {
     let state: WizardSnapshot = initialSnapshot();
     const subs = new Set<(s: WizardSnapshot) => void>();
     let emailTimer: ReturnType<typeof setTimeout> | null = null;
+    let usernameTimer: ReturnType<typeof setTimeout> | null = null;
+    let referralTimer: ReturnType<typeof setTimeout> | null = null;
     let draftTimer: ReturnType<typeof setTimeout> | null = null;
-    let emailReqId = 0; // race-condition guard for async email check
+    let emailReqId = 0;
+    let usernameReqId = 0;
+    let referralReqId = 0;
 
     const emit = () => {
       for (const cb of subs) cb(state);
@@ -43,7 +51,7 @@ export const nakedFactory: EngineFactory = {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, step }));
       } catch {
-        // localStorage unavailable / quota — silent
+        // ignore
       }
     };
     const schedulePersist = () => {
@@ -69,9 +77,42 @@ export const nakedFactory: EngineFactory = {
         const reqId = ++emailReqId;
         merge({ emailStatus: 'checking' });
         const ok = await checkEmailAvailable(value);
-        if (reqId !== emailReqId) return; // superseded
-        merge({ emailStatus: ok ? 'available' : 'taken' });
+        if (reqId !== emailReqId) return;
+        merge({ emailStatus: ok ? 'valid' : 'invalid' });
       }, EMAIL_DEBOUNCE_MS);
+    };
+    const scheduleUsernameCheck = (value: string) => {
+      if (usernameTimer) clearTimeout(usernameTimer);
+      if (!value) {
+        merge({ usernameStatus: 'idle' });
+        return;
+      }
+      usernameTimer = setTimeout(async () => {
+        usernameTimer = null;
+        const reqId = ++usernameReqId;
+        merge({ usernameStatus: 'checking' });
+        const ok = await checkUsernameAvailable(value);
+        if (reqId !== usernameReqId) return;
+        merge({ usernameStatus: ok ? 'valid' : 'invalid' });
+      }, USERNAME_DEBOUNCE_MS);
+    };
+    const scheduleReferralLookup = (value: string) => {
+      if (referralTimer) clearTimeout(referralTimer);
+      if (!value) {
+        merge({ referralStatus: 'idle', referrerName: null });
+        return;
+      }
+      referralTimer = setTimeout(async () => {
+        referralTimer = null;
+        const reqId = ++referralReqId;
+        merge({ referralStatus: 'checking' });
+        const name = await lookupReferralCode(value);
+        if (reqId !== referralReqId) return;
+        merge({
+          referralStatus: name ? 'valid' : 'invalid',
+          referrerName: name,
+        });
+      }, REFERRAL_DEBOUNCE_MS);
     };
 
     return {
@@ -84,11 +125,19 @@ export const nakedFactory: EngineFactory = {
         const data = { ...state.data, [name]: value };
         merge({ data });
         if (name === 'email') scheduleEmailCheck(value as string);
+        else if (name === 'username') scheduleUsernameCheck(value as string);
+        else if (name === 'referralCode') scheduleReferralLookup(value as string);
         schedulePersist();
       },
       next() {
         if (state.submit.kind === 'submitting') return;
-        const errors = validateStep(state.step, state.data, state.emailStatus);
+        const errors = validateStep(
+          state.step,
+          state.data,
+          state.emailStatus,
+          state.usernameStatus,
+          state.referralStatus,
+        );
         if (Object.keys(errors).length > 0) {
           merge({ errors });
           return;
@@ -113,10 +162,16 @@ export const nakedFactory: EngineFactory = {
       },
       reset() {
         if (emailTimer) clearTimeout(emailTimer);
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (referralTimer) clearTimeout(referralTimer);
         if (draftTimer) clearTimeout(draftTimer);
         emailTimer = null;
+        usernameTimer = null;
+        referralTimer = null;
         draftTimer = null;
         emailReqId++;
+        usernameReqId++;
+        referralReqId++;
         try {
           localStorage.removeItem(STORAGE_KEY);
         } catch {
@@ -141,6 +196,8 @@ export const nakedFactory: EngineFactory = {
       },
       dispose() {
         if (emailTimer) clearTimeout(emailTimer);
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (referralTimer) clearTimeout(referralTimer);
         if (draftTimer) clearTimeout(draftTimer);
         subs.clear();
       },

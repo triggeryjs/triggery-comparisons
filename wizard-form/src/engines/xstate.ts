@@ -1,23 +1,34 @@
-// XState — the state machine wizards were built for. Every step is a state
-// node; every transition is a `target` + `guard`. Email-debounce and draft-
-// save use cancellable delayed raises (`raise({ delay, id })` + `cancel(id)`).
-// Async submit is an invoked actor. The whole wizard is one declarative
-// statechart — its `.value` is the truth for "what step are we on".
+// XState — the state machine wizards were built for. States are step nodes;
+// transitions carry guards. Three async fields = three cancellable delayed
+// raises (`raise(EV, { delay, id })` + `cancel(id)` per field) + three
+// invoked-actor patterns. Async submit is its own invoked promise actor.
 
-import { type ActorRefFrom, assign, cancel, createActor, fromPromise, raise, setup } from 'xstate';
+import {
+  type ActorRefFrom,
+  assign,
+  cancel,
+  createActor,
+  fromPromise,
+  raise,
+  setup,
+} from 'xstate';
 import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import {
   DRAFT_DEBOUNCE_MS,
   EMAIL_DEBOUNCE_MS,
+  REFERRAL_DEBOUNCE_MS,
   STORAGE_KEY,
+  USERNAME_DEBOUNCE_MS,
   checkEmailAvailable,
+  checkUsernameAvailable,
   emptyData,
+  lookupReferralCode,
   progressFor,
   submitWizard,
   validateStep,
 } from '../scenario';
 import type {
-  EmailStatus,
+  AsyncStatus,
   FieldName,
   Step,
   WizardData,
@@ -27,8 +38,13 @@ import type {
 type Ctx = {
   data: WizardData;
   errors: Partial<Record<FieldName, string>>;
-  emailStatus: EmailStatus;
+  emailStatus: AsyncStatus;
+  usernameStatus: AsyncStatus;
+  referralStatus: AsyncStatus;
+  referrerName: string | null;
   emailReqId: number;
+  usernameReqId: number;
+  referralReqId: number;
   submitResult: { kind: 'idle' } | { kind: 'success'; userId: string } | { kind: 'error'; message: string };
 };
 
@@ -40,53 +56,94 @@ type Ev =
   | { type: 'RESET' }
   | { type: 'LOAD_DRAFT' }
   | { type: 'CHECK_EMAIL' }
+  | { type: 'CHECK_USERNAME' }
+  | { type: 'LOOKUP_REFERRAL' }
   | { type: 'EMAIL_CHECKED'; reqId: number; available: boolean }
+  | { type: 'USERNAME_CHECKED'; reqId: number; available: boolean }
+  | { type: 'REFERRAL_LOOKED_UP'; reqId: number; referrerName: string | null }
   | { type: 'PERSIST_DRAFT' };
 
 const machine = setup({
   types: { context: {} as Ctx, events: {} as Ev },
   actors: {
-    emailCheck: fromPromise(async ({ input }: { input: { email: string } }) =>
-      checkEmailAvailable(input.email),
-    ),
     submitActor: fromPromise(async ({ input }: { input: { data: WizardData } }) =>
       submitWizard(input.data),
     ),
   },
   guards: {
     accountValid: ({ context }) =>
-      Object.keys(validateStep('account', context.data, context.emailStatus)).length === 0,
+      Object.keys(
+        validateStep('account', context.data, context.emailStatus, context.usernameStatus),
+      ).length === 0,
     profileValid: ({ context }) =>
-      Object.keys(validateStep('profile', context.data, context.emailStatus)).length === 0,
+      Object.keys(
+        validateStep(
+          'profile', context.data,
+          context.emailStatus, context.usernameStatus, context.referralStatus,
+        ),
+      ).length === 0,
     teamSizeValid: ({ context }) =>
       Object.keys(validateStep('team-size', context.data, context.emailStatus)).length === 0,
     isManager: ({ context }) => context.data.role === 'manager',
   },
   actions: {
     setField: assign({
-      data: ({ context, event }) => {
-        if (event.type !== 'SET_FIELD') return context.data;
-        return { ...context.data, [event.name]: event.value };
-      },
-      emailStatus: ({ context, event }) => {
-        if (event.type !== 'SET_FIELD' || event.name !== 'email') return context.emailStatus;
-        return (event.value as string) ? 'checking' : 'idle';
-      },
-      emailReqId: ({ context, event }) => {
-        if (event.type !== 'SET_FIELD' || event.name !== 'email') return context.emailReqId;
-        return context.emailReqId + 1;
-      },
+      data: ({ context, event }) =>
+        event.type === 'SET_FIELD' ? { ...context.data, [event.name]: event.value } : context.data,
+      emailStatus: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'email'
+          ? ((event.value as string) ? 'checking' : 'idle')
+          : context.emailStatus,
+      usernameStatus: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'username'
+          ? ((event.value as string) ? 'checking' : 'idle')
+          : context.usernameStatus,
+      referralStatus: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'referralCode'
+          ? ((event.value as string) ? 'checking' : 'idle')
+          : context.referralStatus,
+      referrerName: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'referralCode' && !event.value
+          ? null
+          : context.referrerName,
+      emailReqId: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'email'
+          ? context.emailReqId + 1
+          : context.emailReqId,
+      usernameReqId: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'username'
+          ? context.usernameReqId + 1
+          : context.usernameReqId,
+      referralReqId: ({ context, event }) =>
+        event.type === 'SET_FIELD' && event.name === 'referralCode'
+          ? context.referralReqId + 1
+          : context.referralReqId,
     }),
-    runValidation: assign({
-      errors: ({ context }) => {
-        return validateStep(
-          context.data.role === 'manager' && context.data.teamSize === ''
-            ? 'team-size'
-            : 'account',
-          context.data,
-          context.emailStatus,
-        );
-      },
+    setEmailChecked: assign(({ context, event }) =>
+      event.type === 'EMAIL_CHECKED' && event.reqId === context.emailReqId
+        ? { emailStatus: event.available ? ('valid' as const) : ('invalid' as const) }
+        : {},
+    ),
+    setUsernameChecked: assign(({ context, event }) =>
+      event.type === 'USERNAME_CHECKED' && event.reqId === context.usernameReqId
+        ? { usernameStatus: event.available ? ('valid' as const) : ('invalid' as const) }
+        : {},
+    ),
+    setReferralLookedUp: assign(({ context, event }) => {
+      if (event.type !== 'REFERRAL_LOOKED_UP') return {};
+      if (event.reqId !== context.referralReqId) return {};
+      return {
+        referralStatus: event.referrerName ? ('valid' as const) : ('invalid' as const),
+        referrerName: event.referrerName,
+      };
+    }),
+    setSubmitSuccess: assign({
+      submitResult: (_, params: { userId: string }) =>
+        ({ kind: 'success', userId: params.userId } as const),
+    }),
+    setSubmitError: assign({
+      submitResult: (_, params: { message: string }) =>
+        ({ kind: 'error', message: params.message } as const),
     }),
     persistDraft: ({ context }, params?: { step: Step }) => {
       try {
@@ -105,33 +162,37 @@ const machine = setup({
         // ignore
       }
     },
-    setEmailStatus: assign(({ context, event }) => {
-      if (event.type !== 'EMAIL_CHECKED' || event.reqId !== context.emailReqId) return {};
-      return { emailStatus: event.available ? ('available' as const) : ('taken' as const) };
-    }),
-    setSubmitSuccess: assign({
-      submitResult: (_, params: { userId: string }) => ({ kind: 'success', userId: params.userId } as const),
-    }),
-    setSubmitError: assign({
-      submitResult: (_, params: { message: string }) => ({ kind: 'error', message: params.message } as const),
-    }),
   },
 }).createMachine({
   id: 'wizard',
   initial: 'account',
-  context: { data: emptyData(), errors: {}, emailStatus: 'idle', emailReqId: 0, submitResult: { kind: 'idle' } },
+  context: {
+    data: emptyData(),
+    errors: {},
+    emailStatus: 'idle',
+    usernameStatus: 'idle',
+    referralStatus: 'idle',
+    referrerName: null,
+    emailReqId: 0,
+    usernameReqId: 0,
+    referralReqId: 0,
+    submitResult: { kind: 'idle' },
+  },
   on: {
     SET_FIELD: {
       actions: [
         'setField',
         cancel('email-debounce'),
         raise({ type: 'CHECK_EMAIL' }, { delay: EMAIL_DEBOUNCE_MS, id: 'email-debounce' }),
+        cancel('username-debounce'),
+        raise({ type: 'CHECK_USERNAME' }, { delay: USERNAME_DEBOUNCE_MS, id: 'username-debounce' }),
+        cancel('referral-debounce'),
+        raise({ type: 'LOOKUP_REFERRAL' }, { delay: REFERRAL_DEBOUNCE_MS, id: 'referral-debounce' }),
         cancel('draft-debounce'),
         raise({ type: 'PERSIST_DRAFT' }, { delay: DRAFT_DEBOUNCE_MS, id: 'draft-debounce' }),
       ],
     },
     CHECK_EMAIL: {
-      // spawn the actor inline; result raises EMAIL_CHECKED with reqId
       actions: ({ context, self }) => {
         if (!context.data.email) return;
         const reqId = context.emailReqId;
@@ -140,11 +201,31 @@ const machine = setup({
         );
       },
     },
-    EMAIL_CHECKED: { actions: 'setEmailStatus' },
+    CHECK_USERNAME: {
+      actions: ({ context, self }) => {
+        if (!context.data.username) return;
+        const reqId = context.usernameReqId;
+        checkUsernameAvailable(context.data.username).then((available) =>
+          self.send({ type: 'USERNAME_CHECKED', reqId, available }),
+        );
+      },
+    },
+    LOOKUP_REFERRAL: {
+      actions: ({ context, self }) => {
+        if (!context.data.referralCode) return;
+        const reqId = context.referralReqId;
+        lookupReferralCode(context.data.referralCode).then((referrerName) =>
+          self.send({ type: 'REFERRAL_LOOKED_UP', reqId, referrerName }),
+        );
+      },
+    },
+    EMAIL_CHECKED: { actions: 'setEmailChecked' },
+    USERNAME_CHECKED: { actions: 'setUsernameChecked' },
+    REFERRAL_LOOKED_UP: { actions: 'setReferralLookedUp' },
     PERSIST_DRAFT: {
       actions: ({ context, self }) => {
         try {
-          const snap = self.getSnapshot() as { value: Step | 'submitting' | 'success' | 'error' };
+          const snap = self.getSnapshot() as { value: Step | 'submitting' | 'success' };
           const step = isStepValue(snap.value) ? snap.value : 'review';
           localStorage.setItem(STORAGE_KEY, JSON.stringify({ data: context.data, step }));
         } catch {
@@ -153,7 +234,7 @@ const machine = setup({
       },
     },
     LOAD_DRAFT: {
-      actions: assign(({ context }) => {
+      actions: assign(() => {
         try {
           const raw = localStorage.getItem(STORAGE_KEY);
           if (!raw) return {};
@@ -163,21 +244,26 @@ const machine = setup({
           return {};
         }
       }),
-      // Note: restoring `step` is handled by emitting a series of NEXTs in the
-      // engine façade. Keeping the machine itself pure makes guards predictable.
     },
     RESET: {
       target: '.account',
       actions: [
         cancel('email-debounce'),
+        cancel('username-debounce'),
+        cancel('referral-debounce'),
         cancel('draft-debounce'),
-        assign({
-          data: () => emptyData(),
-          errors: () => ({}),
-          emailStatus: () => 'idle' as const,
-          emailReqId: ({ context }) => context.emailReqId + 1,
-          submitResult: () => ({ kind: 'idle' } as const),
-        }),
+        assign(({ context }) => ({
+          data: emptyData(),
+          errors: {},
+          emailStatus: 'idle' as const,
+          usernameStatus: 'idle' as const,
+          referralStatus: 'idle' as const,
+          referrerName: null,
+          emailReqId: context.emailReqId + 1,
+          usernameReqId: context.usernameReqId + 1,
+          referralReqId: context.referralReqId + 1,
+          submitResult: { kind: 'idle' } as const,
+        })),
         'clearDraft',
       ],
     },
@@ -257,6 +343,9 @@ function snapshotFrom(actor: ActorRefFrom<typeof machine>): WizardSnapshot {
     data: s.context.data,
     errors: s.context.errors,
     emailStatus: s.context.emailStatus,
+    usernameStatus: s.context.usernameStatus,
+    referralStatus: s.context.referralStatus,
+    referrerName: s.context.referrerName,
     progress: progressFor(step),
     submit,
   };
@@ -266,7 +355,7 @@ export const xstateFactory: EngineFactory = {
   meta: {
     id: 'xstate',
     label: 'XState',
-    description: 'Statechart: states + transitions + guards, debounce via raise/cancel.',
+    description: 'Statechart: states + transitions + 3 cancellable raises + invoked submit actor.',
     sourcePath: 'wizard-form/src/engines/xstate.ts',
   },
   create(): Engine {

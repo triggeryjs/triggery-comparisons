@@ -51,7 +51,7 @@ function EngineBar({ current }: { current: string }) {
 }
 
 function Wizard({ engine, snap }: { engine: Engine; snap: ReturnType<Engine['snapshot']> }) {
-  const { step, data, errors, emailStatus, progress, submit } = snap;
+  const { step, data, errors, emailStatus, usernameStatus, referralStatus, referrerName, progress, submit } = snap;
   const isSubmitting = submit.kind === 'submitting';
   const set = <K extends keyof WizardData>(k: K) => (v: WizardData[K]) => engine.setField(k, v);
 
@@ -90,16 +90,18 @@ function Wizard({ engine, snap }: { engine: Engine; snap: ReturnType<Engine['sna
             value={data.email}
             onChange={(v) => set('email')(v)}
             error={errors.email}
-            hint={
-              emailStatus === 'checking'
-                ? 'Checking availability…'
-                : emailStatus === 'available'
-                  ? 'Email is available.'
-                  : ''
-            }
+            hint={asyncHint(emailStatus, 'Email is available.', 'Checking availability…')}
             type="email"
             disabled={isSubmitting}
             autoFocus
+          />
+          <Field
+            label="Username"
+            value={data.username}
+            onChange={(v) => set('username')(v)}
+            error={errors.username}
+            hint={asyncHint(usernameStatus, 'Username is yours.', 'Checking username…')}
+            disabled={isSubmitting}
           />
           <Field
             label="Password"
@@ -147,6 +149,20 @@ function Wizard({ engine, snap }: { engine: Engine; snap: ReturnType<Engine['sna
             </div>
             <div className="err">{errors.role ?? ''}</div>
           </div>
+          <Field
+            label="Referral code (optional)"
+            value={data.referralCode}
+            onChange={(v) => set('referralCode')(v)}
+            error={errors.referralCode}
+            hint={
+              referralStatus === 'checking'
+                ? 'Looking up referral…'
+                : referralStatus === 'valid' && referrerName
+                  ? `Referred by ${referrerName}.`
+                  : 'Try ALEX2026, TRIGGERY or EARLYBIRD.'
+            }
+            disabled={isSubmitting}
+          />
         </>
       )}
 
@@ -205,10 +221,21 @@ function Wizard({ engine, snap }: { engine: Engine; snap: ReturnType<Engine['sna
         <dl className="review">
           <dt>Email</dt>
           <dd>{data.email}</dd>
+          <dt>Username</dt>
+          <dd>{data.username}</dd>
           <dt>Name</dt>
           <dd>{data.name}</dd>
           <dt>Role</dt>
           <dd>{data.role || '—'}</dd>
+          {data.referralCode && (
+            <>
+              <dt>Referral</dt>
+              <dd>
+                {data.referralCode}
+                {referrerName ? <> · <span style={{ color: '#34d399' }}>{referrerName}</span></> : null}
+              </dd>
+            </>
+          )}
           {data.role === 'manager' ? (
             <>
               <dt>Team size</dt>
@@ -287,6 +314,12 @@ function ResetRow({ engine }: { engine: Engine }) {
       )}
     </p>
   );
+}
+
+function asyncHint(status: string, validMsg: string, checkingMsg: string): string {
+  if (status === 'checking') return checkingMsg;
+  if (status === 'valid') return validMsg;
+  return '';
 }
 
 function Field({

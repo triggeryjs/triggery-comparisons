@@ -7,9 +7,13 @@ import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import {
   DRAFT_DEBOUNCE_MS,
   EMAIL_DEBOUNCE_MS,
+  REFERRAL_DEBOUNCE_MS,
   STORAGE_KEY,
+  USERNAME_DEBOUNCE_MS,
   checkEmailAvailable,
+  checkUsernameAvailable,
   emptyData,
+  lookupReferralCode,
   nextStep,
   prevStep,
   progressFor,
@@ -17,7 +21,7 @@ import {
   validateStep,
 } from '../scenario';
 import type {
-  EmailStatus,
+  AsyncStatus,
   FieldName,
   Step,
   SubmitState,
@@ -29,7 +33,7 @@ export const reatomFactory: EngineFactory = {
   meta: {
     id: 'reatom',
     label: 'Reatom',
-    description: 'Atoms + actions, ctx-scoped state, hand-rolled debounce timers.',
+    description: 'Atoms + actions, ctx-scoped state, hand-rolled debounce timers (×3 async).',
     sourcePath: 'wizard-form/src/engines/reatom.ts',
   },
   create(): Engine {
@@ -37,7 +41,10 @@ export const reatomFactory: EngineFactory = {
     const dataAtom = atom<WizardData>(emptyData(), 'data');
     const stepAtom = atom<Step>('account', 'step');
     const errorsAtom = atom<Partial<Record<FieldName, string>>>({}, 'errors');
-    const emailStatusAtom = atom<EmailStatus>('idle', 'emailStatus');
+    const emailStatusAtom = atom<AsyncStatus>('idle', 'emailStatus');
+    const usernameStatusAtom = atom<AsyncStatus>('idle', 'usernameStatus');
+    const referralStatusAtom = atom<AsyncStatus>('idle', 'referralStatus');
+    const referrerNameAtom = atom<string | null>(null, 'referrerName');
     const submitAtom = atom<SubmitState>({ kind: 'idle' }, 'submit');
     const snapshotAtom = atom<WizardSnapshot>((c) => {
       const step = c.spy(stepAtom);
@@ -46,14 +53,21 @@ export const reatomFactory: EngineFactory = {
         data: c.spy(dataAtom),
         errors: c.spy(errorsAtom),
         emailStatus: c.spy(emailStatusAtom),
+        usernameStatus: c.spy(usernameStatusAtom),
+        referralStatus: c.spy(referralStatusAtom),
+        referrerName: c.spy(referrerNameAtom),
         progress: progressFor(step),
         submit: c.spy(submitAtom),
       };
     }, 'snapshot');
 
     let emailTimer: ReturnType<typeof setTimeout> | null = null;
+    let usernameTimer: ReturnType<typeof setTimeout> | null = null;
+    let referralTimer: ReturnType<typeof setTimeout> | null = null;
     let draftTimer: ReturnType<typeof setTimeout> | null = null;
     let emailReqId = 0;
+    let usernameReqId = 0;
+    let referralReqId = 0;
 
     const persist = (data: WizardData, step: Step) => {
       try {
@@ -78,8 +92,44 @@ export const reatomFactory: EngineFactory = {
             const reqId = ++emailReqId;
             const ok = await checkEmailAvailable(v);
             if (reqId !== emailReqId) return;
-            ctx.get(() => emailStatusAtom(ctx, ok ? 'available' : 'taken'));
+            ctx.get(() => emailStatusAtom(ctx, ok ? 'valid' : 'invalid'));
           }, EMAIL_DEBOUNCE_MS);
+        }
+      } else if (name === 'username') {
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (!value) {
+          usernameStatusAtom(c, 'idle');
+          usernameReqId++;
+        } else {
+          usernameStatusAtom(c, 'checking');
+          const v = value as string;
+          usernameTimer = setTimeout(async () => {
+            usernameTimer = null;
+            const reqId = ++usernameReqId;
+            const ok = await checkUsernameAvailable(v);
+            if (reqId !== usernameReqId) return;
+            ctx.get(() => usernameStatusAtom(ctx, ok ? 'valid' : 'invalid'));
+          }, USERNAME_DEBOUNCE_MS);
+        }
+      } else if (name === 'referralCode') {
+        if (referralTimer) clearTimeout(referralTimer);
+        if (!value) {
+          referralStatusAtom(c, 'idle');
+          referrerNameAtom(c, null);
+          referralReqId++;
+        } else {
+          referralStatusAtom(c, 'checking');
+          const v = value as string;
+          referralTimer = setTimeout(async () => {
+            referralTimer = null;
+            const reqId = ++referralReqId;
+            const name = await lookupReferralCode(v);
+            if (reqId !== referralReqId) return;
+            ctx.get(() => {
+              referralStatusAtom(ctx, name ? 'valid' : 'invalid');
+              referrerNameAtom(ctx, name);
+            });
+          }, REFERRAL_DEBOUNCE_MS);
         }
       }
       if (draftTimer) clearTimeout(draftTimer);
@@ -93,7 +143,12 @@ export const reatomFactory: EngineFactory = {
       if (c.get(submitAtom).kind === 'submitting') return;
       const step = c.get(stepAtom);
       const data = c.get(dataAtom);
-      const errs = validateStep(step, data, c.get(emailStatusAtom));
+      const errs = validateStep(
+        step, data,
+        c.get(emailStatusAtom),
+        c.get(usernameStatusAtom),
+        c.get(referralStatusAtom),
+      );
       if (Object.keys(errs).length > 0) {
         errorsAtom(c, errs);
         return;
@@ -132,10 +187,11 @@ export const reatomFactory: EngineFactory = {
 
     const reset = action((c) => {
       if (emailTimer) clearTimeout(emailTimer);
+      if (usernameTimer) clearTimeout(usernameTimer);
+      if (referralTimer) clearTimeout(referralTimer);
       if (draftTimer) clearTimeout(draftTimer);
-      emailTimer = null;
-      draftTimer = null;
-      emailReqId++;
+      emailTimer = usernameTimer = referralTimer = draftTimer = null;
+      emailReqId++; usernameReqId++; referralReqId++;
       try {
         localStorage.removeItem(STORAGE_KEY);
       } catch {
@@ -145,6 +201,9 @@ export const reatomFactory: EngineFactory = {
       stepAtom(c, 'account');
       errorsAtom(c, {});
       emailStatusAtom(c, 'idle');
+      usernameStatusAtom(c, 'idle');
+      referralStatusAtom(c, 'idle');
+      referrerNameAtom(c, null);
       submitAtom(c, { kind: 'idle' });
     }, 'reset');
 
@@ -179,6 +238,8 @@ export const reatomFactory: EngineFactory = {
       loadDraft: () => loadDraft(ctx),
       dispose() {
         if (emailTimer) clearTimeout(emailTimer);
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (referralTimer) clearTimeout(referralTimer);
         if (draftTimer) clearTimeout(draftTimer);
         subs.clear();
       },

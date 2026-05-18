@@ -1,15 +1,19 @@
 // Effector — events + stores + samples wire the wizard into a graph. Effects
-// handle async (email check, submit). Debounce / draft-save use hand-rolled
-// timers because patronum is intentionally excluded for apples-to-apples.
+// handle async (email check, username check, referral lookup, submit).
+// Debounce / draft-save use hand-rolled timers (patronum intentionally excluded).
 
 import { combine, createEffect, createEvent, createStore, sample } from 'effector';
 import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import {
   DRAFT_DEBOUNCE_MS,
   EMAIL_DEBOUNCE_MS,
+  REFERRAL_DEBOUNCE_MS,
   STORAGE_KEY,
+  USERNAME_DEBOUNCE_MS,
   checkEmailAvailable,
+  checkUsernameAvailable,
   emptyData,
+  lookupReferralCode,
   nextStep,
   prevStep,
   progressFor,
@@ -17,7 +21,7 @@ import {
   validateStep,
 } from '../scenario';
 import type {
-  EmailStatus,
+  AsyncStatus,
   FieldName,
   Step,
   SubmitState,
@@ -29,7 +33,7 @@ export const effectorFactory: EngineFactory = {
   meta: {
     id: 'effector',
     label: 'Effector',
-    description: 'Events + stores + samples + effects wired into a reactive graph.',
+    description: 'Events + stores + samples + effects wired into a reactive graph (×3 async).',
     sourcePath: 'wizard-form/src/engines/effector.ts',
   },
   create(): Engine {
@@ -40,11 +44,21 @@ export const effectorFactory: EngineFactory = {
     const resetClicked = createEvent();
     const draftLoaded = createEvent<{ data: WizardData; step: Step } | null>();
     const emailChecked = createEvent<{ reqId: number; available: boolean }>();
+    const usernameChecked = createEvent<{ reqId: number; available: boolean }>();
+    const referralLookedUp = createEvent<{ reqId: number; referrerName: string | null }>();
 
-    const checkEmailFx = createEffect(async (p: { reqId: number; value: string }) => {
-      const available = await checkEmailAvailable(p.value);
-      return { reqId: p.reqId, available };
-    });
+    const checkEmailFx = createEffect(async (p: { reqId: number; value: string }) => ({
+      reqId: p.reqId,
+      available: await checkEmailAvailable(p.value),
+    }));
+    const checkUsernameFx = createEffect(async (p: { reqId: number; value: string }) => ({
+      reqId: p.reqId,
+      available: await checkUsernameAvailable(p.value),
+    }));
+    const lookupReferralFx = createEffect(async (p: { reqId: number; value: string }) => ({
+      reqId: p.reqId,
+      referrerName: await lookupReferralCode(p.value),
+    }));
     const submitFx = createEffect((d: WizardData) => submitWizard(d));
 
     const $data = createStore<WizardData>(emptyData())
@@ -56,13 +70,33 @@ export const effectorFactory: EngineFactory = {
       .on(resetClicked, () => 'account' as Step)
       .on(draftLoaded, (s, p) => (p ? p.step : s));
 
-    const $emailStatus = createStore<EmailStatus>('idle')
-      .on(fieldChanged, (s, { name, value }) => {
-        if (name !== 'email') return s;
-        return value ? ('checking' as EmailStatus) : ('idle' as EmailStatus);
-      })
-      .on(emailChecked, (s, { available }) => (available ? 'available' : 'taken'))
-      .on(resetClicked, () => 'idle' as EmailStatus);
+    const $emailStatus = createStore<AsyncStatus>('idle')
+      .on(fieldChanged, (s, { name, value }) =>
+        name === 'email' ? (value ? 'checking' : 'idle') : s,
+      )
+      .on(emailChecked, (_s, { available }) => (available ? 'valid' : 'invalid'))
+      .on(resetClicked, () => 'idle' as AsyncStatus);
+
+    const $usernameStatus = createStore<AsyncStatus>('idle')
+      .on(fieldChanged, (s, { name, value }) =>
+        name === 'username' ? (value ? 'checking' : 'idle') : s,
+      )
+      .on(usernameChecked, (_s, { available }) => (available ? 'valid' : 'invalid'))
+      .on(resetClicked, () => 'idle' as AsyncStatus);
+
+    const $referralStatus = createStore<AsyncStatus>('idle')
+      .on(fieldChanged, (s, { name, value }) =>
+        name === 'referralCode' ? (value ? 'checking' : 'idle') : s,
+      )
+      .on(referralLookedUp, (_s, { referrerName }) => (referrerName ? 'valid' : 'invalid'))
+      .on(resetClicked, () => 'idle' as AsyncStatus);
+
+    const $referrerName = createStore<string | null>(null)
+      .on(fieldChanged, (s, { name, value }) =>
+        name === 'referralCode' && !value ? null : s,
+      )
+      .on(referralLookedUp, (_s, { referrerName }) => referrerName)
+      .on(resetClicked, () => null);
 
     const $errors = createStore<Partial<Record<FieldName, string>>>({});
     const $submit = createStore<SubmitState>({ kind: 'idle' })
@@ -74,31 +108,22 @@ export const effectorFactory: EngineFactory = {
       )
       .on(resetClicked, () => ({ kind: 'idle' } as SubmitState));
 
-    // emailReqId guards against superseded checks
+    // Race-id stores — incremented on each new request; checked when async lands.
     const $emailReqId = createStore(0).on(fieldChanged, (n, { name }) => (name === 'email' ? n + 1 : n));
+    const $usernameReqId = createStore(0).on(fieldChanged, (n, { name }) => (name === 'username' ? n + 1 : n));
+    const $referralReqId = createStore(0).on(fieldChanged, (n, { name }) => (name === 'referralCode' ? n + 1 : n));
 
-    // Validation: on `nextClicked`, compute errors; if empty, advance.
-    sample({
-      clock: nextClicked,
-      source: { data: $data, step: $step, emailStatus: $emailStatus, sub: $submit },
-      fn: ({ data, step, emailStatus, sub }) => {
-        if (sub.kind === 'submitting') return { errs: {}, advance: null as Step | null };
-        const errs = validateStep(step, data, emailStatus);
-        if (Object.keys(errs).length > 0) return { errs, advance: null };
-        return { errs: {}, advance: nextStep(step, data) };
-      },
-      target: createEvent<{ errs: Partial<Record<FieldName, string>>; advance: Step | null }>().prepend(
-        (x: { errs: Partial<Record<FieldName, string>>; advance: Step | null }) => x,
-      ),
-    });
-
+    // Validation on next-click: compute errors against the full state.
     const validationDone = createEvent<{ errs: Partial<Record<FieldName, string>>; advance: Step | null }>();
     sample({
       clock: nextClicked,
-      source: { data: $data, step: $step, emailStatus: $emailStatus, sub: $submit },
-      fn: ({ data, step, emailStatus, sub }) => {
+      source: {
+        data: $data, step: $step, sub: $submit,
+        emailStatus: $emailStatus, usernameStatus: $usernameStatus, referralStatus: $referralStatus,
+      },
+      fn: ({ data, step, emailStatus, usernameStatus, referralStatus, sub }) => {
         if (sub.kind === 'submitting') return { errs: {}, advance: null as Step | null };
-        const errs = validateStep(step, data, emailStatus);
+        const errs = validateStep(step, data, emailStatus, usernameStatus, referralStatus);
         if (Object.keys(errs).length > 0) return { errs, advance: null };
         return { errs: {}, advance: nextStep(step, data) };
       },
@@ -107,18 +132,6 @@ export const effectorFactory: EngineFactory = {
     $errors.on(validationDone, (_, { errs }) => errs);
     $step.on(validationDone, (s, { advance }) => advance ?? s);
 
-    // Back: just compute previous step
-    $step.on(backClicked, (s) =>
-      // computed here using $data; we re-sample with data
-      s,
-    );
-    sample({
-      clock: backClicked,
-      source: { step: $step, data: $data, sub: $submit },
-      filter: ({ sub }) => sub.kind !== 'submitting',
-      fn: ({ step, data }) => prevStep(step, data),
-      target: createEvent<Step | null>().prepend((x: Step | null) => x),
-    });
     const backResolved = createEvent<Step | null>();
     sample({
       clock: backClicked,
@@ -130,7 +143,6 @@ export const effectorFactory: EngineFactory = {
     $step.on(backResolved, (s, x) => x ?? s);
     $errors.on(backResolved, () => ({}));
 
-    // Submit gating: only fire submitFx when step === 'review'
     sample({
       clock: submitClicked,
       source: { step: $step, data: $data, sub: $submit },
@@ -139,26 +151,59 @@ export const effectorFactory: EngineFactory = {
       target: submitFx,
     });
 
-    // Email debounce — hand-rolled timer in closure
+    // Debounce timers — hand-rolled per field
     let emailTimer: ReturnType<typeof setTimeout> | null = null;
+    let usernameTimer: ReturnType<typeof setTimeout> | null = null;
+    let referralTimer: ReturnType<typeof setTimeout> | null = null;
     fieldChanged.watch(({ name, value }) => {
-      if (name !== 'email') return;
-      if (emailTimer) clearTimeout(emailTimer);
-      if (!value) return;
-      emailTimer = setTimeout(() => {
-        emailTimer = null;
-        checkEmailFx({ reqId: $emailReqId.getState(), value: value as string });
-      }, EMAIL_DEBOUNCE_MS);
+      if (name === 'email') {
+        if (emailTimer) clearTimeout(emailTimer);
+        if (!value) return;
+        emailTimer = setTimeout(() => {
+          emailTimer = null;
+          checkEmailFx({ reqId: $emailReqId.getState(), value: value as string });
+        }, EMAIL_DEBOUNCE_MS);
+      } else if (name === 'username') {
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (!value) return;
+        usernameTimer = setTimeout(() => {
+          usernameTimer = null;
+          checkUsernameFx({ reqId: $usernameReqId.getState(), value: value as string });
+        }, USERNAME_DEBOUNCE_MS);
+      } else if (name === 'referralCode') {
+        if (referralTimer) clearTimeout(referralTimer);
+        if (!value) return;
+        referralTimer = setTimeout(() => {
+          referralTimer = null;
+          lookupReferralFx({ reqId: $referralReqId.getState(), value: value as string });
+        }, REFERRAL_DEBOUNCE_MS);
+      }
     });
+
+    // Async result gating — only fire the *Checked event if reqId still matches.
     sample({
       clock: checkEmailFx.doneData,
       source: $emailReqId,
-      filter: (current, r) => r.reqId === current,
+      filter: (cur, r) => r.reqId === cur,
       fn: (_, r) => r,
       target: emailChecked,
     });
+    sample({
+      clock: checkUsernameFx.doneData,
+      source: $usernameReqId,
+      filter: (cur, r) => r.reqId === cur,
+      fn: (_, r) => r,
+      target: usernameChecked,
+    });
+    sample({
+      clock: lookupReferralFx.doneData,
+      source: $referralReqId,
+      filter: (cur, r) => r.reqId === cur,
+      fn: (_, r) => r,
+      target: referralLookedUp,
+    });
 
-    // Draft save — hand-rolled debounce on any field change; flush on next
+    // Draft save: debounced on any field change; flushed on forward navigation.
     let draftTimer: ReturnType<typeof setTimeout> | null = null;
     const persist = (data: WizardData, step: Step) => {
       try {
@@ -189,16 +234,10 @@ export const effectorFactory: EngineFactory = {
     });
 
     const $snapshot = combine(
-      $data,
-      $step,
-      $errors,
-      $emailStatus,
-      $submit,
-      (data, step, errors, emailStatus, sub): WizardSnapshot => ({
-        data,
-        step,
-        errors,
-        emailStatus,
+      $data, $step, $errors, $emailStatus, $usernameStatus, $referralStatus, $referrerName, $submit,
+      (data, step, errors, emailStatus, usernameStatus, referralStatus, referrerName, sub): WizardSnapshot => ({
+        data, step, errors,
+        emailStatus, usernameStatus, referralStatus, referrerName,
         progress: progressFor(step),
         submit: sub,
       }),
@@ -231,6 +270,8 @@ export const effectorFactory: EngineFactory = {
       dispose() {
         unwatch();
         if (emailTimer) clearTimeout(emailTimer);
+        if (usernameTimer) clearTimeout(usernameTimer);
+        if (referralTimer) clearTimeout(referralTimer);
         if (draftTimer) clearTimeout(draftTimer);
         subs.clear();
       },

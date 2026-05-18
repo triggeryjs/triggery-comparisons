@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T06:12:41.665Z",
+  "measuredAt": "2026-05-18T06:39:06.716Z",
   "rows": [
     {
       "engine": "naked",
@@ -7,7 +7,7 @@
       "importedSymbols": 0,
       "primitives": {},
       "primitivesTotal": 0,
-      "cyclo": 22,
+      "cyclo": 36,
       "nesting": 7,
       "asCasts": 1,
       "nonNull": 0
@@ -17,11 +17,11 @@
       "importedSources": 1,
       "importedSymbols": 2,
       "primitives": {
-        "createTrigger": 1,
+        "createTrigger": 2,
         "createRuntime": 1
       },
-      "primitivesTotal": 2,
-      "cyclo": 29,
+      "primitivesTotal": 3,
+      "cyclo": 46,
       "nesting": 9,
       "asCasts": 3,
       "nonNull": 0
@@ -31,13 +31,13 @@
       "importedSources": 1,
       "importedSymbols": 3,
       "primitives": {
-        "atom": 6,
+        "atom": 9,
         "action": 6,
         "createCtx": 1
       },
-      "primitivesTotal": 13,
-      "cyclo": 22,
-      "nesting": 6,
+      "primitivesTotal": 16,
+      "cyclo": 36,
+      "nesting": 7,
       "asCasts": 1,
       "nonNull": 0
     },
@@ -47,15 +47,15 @@
       "importedSymbols": 5,
       "primitives": {
         "createEvent": 11,
-        "createStore": 5,
-        "createEffect": 2,
+        "createStore": 8,
+        "createEffect": 4,
         "sample": 6,
         "combine": 1
       },
-      "primitivesTotal": 25,
-      "cyclo": 25,
+      "primitivesTotal": 30,
+      "cyclo": 38,
       "nesting": 6,
-      "asCasts": 11,
+      "asCasts": 10,
       "nonNull": 0
     },
     {
@@ -66,8 +66,8 @@
         "createSlice": 1
       },
       "primitivesTotal": 1,
-      "cyclo": 24,
-      "nesting": 6,
+      "cyclo": 43,
+      "nesting": 7,
       "asCasts": 4,
       "nonNull": 0
     },
@@ -79,12 +79,12 @@
         "createAction": 1,
         "createSlice": 1,
         "createListenerMiddleware": 1,
-        "startListening": 4
+        "startListening": 6
       },
-      "primitivesTotal": 7,
-      "cyclo": 17,
+      "primitivesTotal": 9,
+      "cyclo": 30,
       "nesting": 6,
-      "asCasts": 11,
+      "asCasts": 18,
       "nonNull": 0
     },
     {
@@ -93,7 +93,7 @@
       "importedSymbols": 7,
       "primitives": {},
       "primitivesTotal": 0,
-      "cyclo": 20,
+      "cyclo": 36,
       "nesting": 8,
       "asCasts": 4,
       "nonNull": 0
@@ -106,7 +106,7 @@
         "createSlice": 1
       },
       "primitivesTotal": 1,
-      "cyclo": 17,
+      "cyclo": 30,
       "nesting": 6,
       "asCasts": 7,
       "nonNull": 0
@@ -118,12 +118,12 @@
       "primitives": {
         "Subject": 1,
         "BehaviorSubject": 1,
-        ".pipe(": 13
+        ".pipe(": 19
       },
-      "primitivesTotal": 15,
-      "cyclo": 26,
+      "primitivesTotal": 21,
+      "cyclo": 37,
       "nesting": 7,
-      "asCasts": 3,
+      "asCasts": 5,
       "nonNull": 0
     }
   ]

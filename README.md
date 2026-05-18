@@ -9,14 +9,16 @@ Side-by-side, honest comparisons of orchestration libraries on identical real-wo
 | Scenario | Status | Libraries compared |
 |---|---|---|
 | [`notifications-pipeline`](./notifications-pipeline) | ✅ shipped | triggery · effector · rxjs · reatom · RTK listenerMiddleware · redux-thunk · redux-saga · naked baseline |
-| [`wizard-form`](./wizard-form) | 🚧 planned | + xstate, jotai, formik / RHF |
+| [`wizard-form`](./wizard-form) | ✅ shipped | + xstate (9 implementations total) |
 | [`modal-stack`](./modal-stack) | 🚧 planned | + xstate, zustand |
 
 More to come (`debounced-search`, others). PRs welcome.
 
-## Headline result so far
+## Headline results
 
-From [`notifications-pipeline`](./notifications-pipeline) (15-rule Discord-style notifications scenario, 8 implementations, frozen acceptance behaviour):
+Two scenarios shipped so far. They probe different shapes of the same problem space — **event-driven side-effects** (notifications) and **multi-step state + per-field async** (wizard) — and the leaderboard reshuffles between them on purpose. Each scenario's full numbers + narrative live in its own README.
+
+### [`notifications-pipeline`](./notifications-pipeline) — 15 rules, gating + throttle + debounce + fan-out
 
 | axis | leader | triggery |
 |---|---|---|
@@ -27,7 +29,19 @@ From [`notifications-pipeline`](./notifications-pipeline) (15-rule Discord-style
 | **Latency p50 (single ev.)** | rxjs — 0.25 µs | 3rd (1.5 µs fireSync) |
 | **Scaling cost (adding R15)** | reatom / rtk — +5 LOC | tied at +6 |
 
-Full numbers and per-engine narrative live in [`notifications-pipeline/README.md`](./notifications-pipeline/README.md).
+### [`wizard-form`](./wizard-form) — multi-step + 3 async-validated fields + branching
+
+| axis | leader | triggery |
+|---|---|---|
+| **LOC** | **triggery — 219** (after naked 196) | **1st** (+11 vs reatom, +157 vs xstate) |
+| **API surface** | **triggery — 1 import / 2 symbols** | **1st** |
+| **Bundle (gzipped)** | reatom — 4.44 KB | 2nd (6.04 KB) |
+| **Throughput (setField)** | rxjs — 276k op/sec | 3rd (206k) |
+| **Latency p50** | reatom — 2.1 µs | 3rd (2.6 µs) |
+| **Scaling (+2 async fields)** | **effector / triggery — +40 / +56** | best-of-the-rest |
+| **Cyclomatic complexity** | rtk / saga — 30 | last (46 — switch-handler shape) |
+
+> **Same library, different scenarios:** Triggery wins LOC + API surface in both scenarios but loses cyclomatic in the wizard (the imperative switch handler concentrates branches). xstate is competitive when the scenario is "many states, no async fields" and falls behind as async-field count grows (each new field costs `cancel + raise + invoked actor` boilerplate).
 
 ## What we measure
 

@@ -1,11 +1,11 @@
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   3.29 KB |   1.49 KB |
-| reatom       |   9.15 KB |   4.03 KB |
-| triggery     |  15.49 KB |   5.58 KB |
-| effector     |  22.71 KB |  10.01 KB |
-| redux-thunk  |  25.42 KB |   9.84 KB |
-| rtk-listener |  29.39 KB |  11.28 KB |
-| rxjs         |  29.95 KB |   9.52 KB |
-| redux-saga   |  41.49 KB |  15.69 KB |
-| xstate       |  43.96 KB |  14.57 KB |
+| naked        |   4.53 KB |   1.88 KB |
+| reatom       |  10.41 KB |   4.44 KB |
+| triggery     |  17.15 KB |   6.04 KB |
+| effector     |  24.10 KB |  10.48 KB |
+| redux-thunk  |  27.03 KB |  10.29 KB |
+| rtk-listener |  31.16 KB |  11.73 KB |
+| rxjs         |  31.37 KB |   9.93 KB |
+| redux-saga   |  43.17 KB |  16.14 KB |
+| xstate       |  46.27 KB |  15.12 KB |

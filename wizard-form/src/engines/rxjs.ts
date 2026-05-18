@@ -29,10 +29,14 @@ import type { Engine, EngineFactory, Unsubscribe } from '../engine';
 import {
   DRAFT_DEBOUNCE_MS,
   EMAIL_DEBOUNCE_MS,
+  REFERRAL_DEBOUNCE_MS,
   STORAGE_KEY,
+  USERNAME_DEBOUNCE_MS,
   checkEmailAvailable,
+  checkUsernameAvailable,
   emptyData,
   initialSnapshot,
+  lookupReferralCode,
   nextStep,
   prevStep,
   progressFor,
@@ -49,6 +53,8 @@ type Action =
   | { type: 'reset' }
   | { type: 'loadDraft'; data: WizardData; step: Step }
   | { type: 'emailChecked'; reqId: number; available: boolean }
+  | { type: 'usernameChecked'; reqId: number; available: boolean }
+  | { type: 'referralLookedUp'; reqId: number; referrerName: string | null }
   | { type: 'submitDone'; ok: boolean; userId?: string; error?: string };
 
 export const rxjsFactory: EngineFactory = {
@@ -62,6 +68,8 @@ export const rxjsFactory: EngineFactory = {
     const actions$ = new Subject<Action>();
     const snapshot$ = new BehaviorSubject<WizardSnapshot>(initialSnapshot());
     let emailReqId = 0;
+    let usernameReqId = 0;
+    let referralReqId = 0;
 
     const persist = (data: WizardData, step: Step) => {
       try {
@@ -76,17 +84,26 @@ export const rxjsFactory: EngineFactory = {
         case 'set': {
           const data = { ...s.data, [a.name]: a.value };
           if (a.name === 'email') {
+            return { ...s, data, emailStatus: a.value ? 'checking' : 'idle' };
+          }
+          if (a.name === 'username') {
+            return { ...s, data, usernameStatus: a.value ? 'checking' : 'idle' };
+          }
+          if (a.name === 'referralCode') {
             return {
               ...s,
               data,
-              emailStatus: (a.value as string) ? 'checking' : 'idle',
+              referralStatus: a.value ? 'checking' : 'idle',
+              referrerName: a.value ? s.referrerName : null,
             };
           }
           return { ...s, data };
         }
         case 'next': {
           if (s.submit.kind === 'submitting') return s;
-          const errs = validateStep(s.step, s.data, s.emailStatus);
+          const errs = validateStep(
+            s.step, s.data, s.emailStatus, s.usernameStatus, s.referralStatus,
+          );
           if (Object.keys(errs).length > 0) return { ...s, errors: errs };
           const ns = nextStep(s.step, s.data);
           if (!ns) return s;
@@ -119,7 +136,15 @@ export const rxjsFactory: EngineFactory = {
             progress: progressFor(a.step),
           };
         case 'emailChecked':
-          return { ...s, emailStatus: a.available ? 'available' : 'taken' };
+          return { ...s, emailStatus: a.available ? 'valid' : 'invalid' };
+        case 'usernameChecked':
+          return { ...s, usernameStatus: a.available ? 'valid' : 'invalid' };
+        case 'referralLookedUp':
+          return {
+            ...s,
+            referralStatus: a.referrerName ? 'valid' : 'invalid',
+            referrerName: a.referrerName,
+          };
       }
     };
 
@@ -136,6 +161,34 @@ export const rxjsFactory: EngineFactory = {
         const reqId = ++emailReqId;
         return from(checkEmailAvailable(a.value as string)).pipe(
           map((available) => ({ type: 'emailChecked', reqId, available }) as Action),
+        );
+      }),
+    );
+
+    const usernameSet$ = actions$.pipe(
+      filter((a): a is Extract<Action, { type: 'set' }> => a.type === 'set' && a.name === 'username'),
+    );
+    const usernameCheck$ = usernameSet$.pipe(
+      debounceTime(USERNAME_DEBOUNCE_MS),
+      filter((a) => Boolean(a.value)),
+      switchMap((a) => {
+        const reqId = ++usernameReqId;
+        return from(checkUsernameAvailable(a.value as string)).pipe(
+          map((available) => ({ type: 'usernameChecked', reqId, available }) as Action),
+        );
+      }),
+    );
+
+    const referralSet$ = actions$.pipe(
+      filter((a): a is Extract<Action, { type: 'set' }> => a.type === 'set' && a.name === 'referralCode'),
+    );
+    const referralLookup$ = referralSet$.pipe(
+      debounceTime(REFERRAL_DEBOUNCE_MS),
+      filter((a) => Boolean(a.value)),
+      switchMap((a) => {
+        const reqId = ++referralReqId;
+        return from(lookupReferralCode(a.value as string)).pipe(
+          map((referrerName) => ({ type: 'referralLookedUp', reqId, referrerName }) as Action),
         );
       }),
     );
@@ -176,6 +229,8 @@ export const rxjsFactory: EngineFactory = {
       filter((a) => a.type === 'reset'),
       tap(() => {
         emailReqId++;
+        usernameReqId++;
+        referralReqId++;
         try {
           localStorage.removeItem(STORAGE_KEY);
         } catch {
@@ -186,7 +241,7 @@ export const rxjsFactory: EngineFactory = {
     );
 
     // Feed derived actions back into the reducer pipeline
-    const feedback$ = merge(emailCheck$, submit$);
+    const feedback$ = merge(emailCheck$, usernameCheck$, referralLookup$, submit$);
     const sub: Subscription = new Subscription();
     sub.add(feedback$.subscribe((a) => actions$.next(a)));
     sub.add(draftDebounced$.subscribe());

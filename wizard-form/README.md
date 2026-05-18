@@ -1,38 +1,43 @@
 # Wizard form
 
-A multi-step onboarding wizard: account → profile → (preferences | team-size, branching on role) → review → submit. Email is async-validated. Drafts are persisted. Submit is a network call with success/failure. Same UI, **nine implementations**, one frozen spec.
+A multi-step onboarding wizard with **three async-validated fields** (email + username + referral-code lookup), conditional branching (manager → team-size, everyone else → preferences), debounced draft persistence, and an async submit. Same UI, **nine implementations**, one frozen spec.
 
 ## Headline numbers
 
-For the 8-rule scenario in this folder (see [acceptance spec](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor. xstate is *included* this time because state machines are exactly what wizards are.
+For the spec in this folder (see [acceptance behaviour](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.
 
 |                                | best library             | worst library              | triggery |
 |---|---|---|---|
-| **LOC**                        | **triggery — 163**         | xstate — 283               | **1st** |
+| **LOC**                        | **triggery — 219**         | xstate — 376               | **1st** (gap +11 vs reatom, +157 vs xstate) |
 | **API surface**                | **triggery — 1 import / 2 symbols** | rxjs — 2 imports / 18 symbols | **1st** |
-| **Bundle (gzipped)**           | reatom — 4.03 KB           | redux-saga — 15.69 KB      | 2nd (5.58 KB) |
-| **Throughput (setField/sec)**  | rxjs — 305k op/sec         | rtk — 20k op/sec           | 3rd (205k) |
-| **Latency p50**                | rxjs / reatom — 2.0 µs     | rtk — 9.5 µs               | 3rd (2.6 µs) |
-| **Cyclomatic complexity**      | rtk / saga — 17            | **triggery — 29**          | **last** |
+| **Bundle (gzipped)**           | reatom — 4.44 KB           | redux-saga — 16.14 KB      | 2nd (6.04 KB) |
+| **Throughput (setField/sec)**  | rxjs — 276k op/sec         | rtk — 32k op/sec           | 3rd (206k) |
+| **Latency p50**                | reatom — 2.1 µs            | rtk — 11 µs                | 3rd (2.6 µs) |
+| **Cyclomatic complexity**      | rtk / saga — 30            | **triggery — 46**          | **last** |
+| **Scaling: +2 async fields (Δ LOC)** | **effector — +40** *(graph reuse)* | xstate — +93 | **+56** (median) |
 
-Triggery wins on LOC + API surface; rxjs wins both perf axes (sync Subject + `scan` reducer is unbeatable for "apply N field updates"); reatom keeps its smallest-bundle crown; **xstate is the verbose one** (283 LOC, 14.57 KB gz, 71k op/sec) but its cyclomatic complexity is the 3rd-lowest in the matrix (20) — *the statechart shifts complexity out of `if`-chains into declarative transitions, which the cyclomatic counter rewards*. That trade-off is the whole point.
+Three things to read off this table:
 
-- [`triggery`](./src/engines/triggery.ts) — one trigger, switch-on-event handler, `actions.debounce()` for email + draft
-- [`xstate`](./src/engines/xstate.ts) — statechart: states + transitions + guards; debounce via `raise({ delay, id })` + `cancel(id)`
-- [`effector`](./src/engines/effector.ts) — events + stores + samples + effects
-- [`rxjs`](./src/engines/rxjs.ts) — `Subject<Action>` + `scan` reducer + operators
-- [`reatom`](./src/engines/reatom.ts) — atoms + actions, ctx-scoped state, hand-rolled timers
-- [`rtk-listener`](./src/engines/rtk-listener.ts) — slice + listenerMiddleware
-- [`redux-thunk`](./src/engines/redux-thunk.ts) — slice + thunks + hand-rolled timers
-- [`redux-saga`](./src/engines/redux-saga.ts) — slice + saga (`debounce` / `takeEvery` / `call`)
-- [`naked`](./src/engines/naked.ts) — no library, mutable state, plain `setTimeout`
+1. **Triggery wins LOC by the largest margin in the matrix.** Each extra async field adds **one declarative line** — `actions.debounce(N).checkX()` — versus 8-15 lines per field in every other engine (3 in xstate's `raise + cancel + actor` pattern, 4-5 in others' hand-rolled timer + reqId + reqId-check).
+2. **xstate falls out of contention as the wizard grows.** v1 (1 async field): xstate was the readability winner with 3rd-lowest cyclomatic. v2 (3 async fields): xstate is now the longest **and** the second-slowest. Every new async source needs a new debounce id + raise + cancel + invoked actor — the statechart's declarative-transitions advantage doesn't extend to per-field async machinery.
+3. **Triggery still pays in cyclomatic.** Two `switch`-shaped handlers (editing + nav) concentrate every branch in two spots — by far the largest cyclomatic count in the matrix. The trade-off is honest: fewer lines, denser branches.
+
+- [`triggery`](./src/engines/triggery.ts) — **two** triggers (editing + nav), `actions.debounce(N).checkX()` per async field
+- [`xstate`](./src/engines/xstate.ts) — statechart + 3 cancellable raises + invoked submit actor
+- [`effector`](./src/engines/effector.ts) — events + stores + samples + 3 createEffect's
+- [`rxjs`](./src/engines/rxjs.ts) — `Subject<Action>` + `scan` reducer + 3 debounceTime streams
+- [`reatom`](./src/engines/reatom.ts) — atoms + actions, 3 hand-rolled debounce timers
+- [`rtk-listener`](./src/engines/rtk-listener.ts) — slice + 3 listeners with cancelActiveListeners + delay
+- [`redux-thunk`](./src/engines/redux-thunk.ts) — slice + 3 hand-rolled timers in thunks
+- [`redux-saga`](./src/engines/redux-saga.ts) — slice + 3 `debounce(ms, action, saga)` effects
+- [`naked`](./src/engines/naked.ts) — no library, 3 setTimeout handles + 3 reqIds
 
 ## Acceptance behaviour (the spec — frozen)
 
 ### Steps + branching
 
-1. **`account`** — email, password, password-confirm.
-2. **`profile`** — name, role (`developer` | `designer` | `manager`).
+1. **`account`** — email, username, password, password-confirm.
+2. **`profile`** — name, role (`developer` | `designer` | `manager`), optional referral code.
 3. **`preferences`** — notification frequency + marketing opt-in (only when `role !== 'manager'`).
 3'. **`team-size`** — pick a team size (only when `role === 'manager'`).
 4. **`review`** — read-only summary.
@@ -45,13 +50,16 @@ Triggery wins on LOC + API surface; rxjs wins both perf axes (sync Subject + `sc
 - **R3.** Conditional branching on `role`:
   - `profile` → `team-size` if `role === 'manager'`, else `profile` → `preferences`.
   - back from review goes to whichever branch was taken.
-- **R4.** Email field — **debounced 500 ms** — hits `checkEmailAvailable(email)` (~250 ms mocked); supersedes in-flight checks on new keystrokes; if response is for an outdated input, drop it.
-- **R5.** Any field change schedules a **debounced 1000 ms** localStorage write. On forward navigation, flush the pending draft immediately (no debounce wait).
+- **R4.** **Three async-validated fields**, each with its own debounce window + race-id guard:
+  - **email** — debounce 500 ms; hits `checkEmailAvailable(email)` (~250 ms mocked). Supersedes in-flight checks on new keystrokes.
+  - **username** — debounce 300 ms; hits `checkUsernameAvailable(username)` (~200 ms). Same supersession.
+  - **referralCode** — debounce 800 ms; hits `lookupReferralCode(code)` (~350 ms). On success, the referrer's display name is shown next to the field.
+- **R5.** Any field change schedules a **debounced 1000 ms** localStorage write. On forward navigation, flush the pending draft immediately.
 - **R6.** Submit (from `review`) flips state to `submitting` (disables inputs), then resolves to `success { userId }` or `error { message }` (~700 ms, 1-in-5 fails).
 - **R7.** Reset clears all state + draft, returns to step 1.
 - **R8.** Display `step X of N` — derived; total is 4 (`account / profile / [prefs|team-size] / review`).
 
-The mocked `checkEmailAvailable` says `admin@example.com` and `taken@example.com` are taken; everything else passes.
+The mocked backend says `admin@example.com` / `taken@example.com` and usernames `admin / root / system / support / taken` are taken. Referral codes that resolve: `ALEX2026` → Alex Karp, `TRIGGERY` → Triggery Team, `EARLYBIRD` → Early Access.
 
 ## How to play with it
 
@@ -80,139 +88,157 @@ LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
 | engine | LOC | bytes |
 |---|---:|---:|
-| naked        |  139 |  4903 |
-| **triggery** | **163** | **6590** |
-| reatom       |  169 |  5708 |
-| redux-thunk  |  189 |  6543 |
-| redux-saga   |  193 |  6848 |
-| rtk-listener |  195 |  6734 |
-| rxjs         |  205 |  7545 |
-| effector     |  210 |  8467 |
-| xstate       |  283 | 10045 |
+| naked        |  196 |  6892 |
+| **triggery** | **219** | **9524** |
+| reatom       |  230 |  8252 |
+| redux-saga   |  249 |  9361 |
+| effector     |  250 | 10656 |
+| redux-thunk  |  253 |  9243 |
+| rxjs         |  258 |  9665 |
+| rtk-listener |  260 |  9328 |
+| xstate       |  376 | 12988 |
 
 Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised, `production` export condition enabled:
 
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   3.29 KB |   1.49 KB |
-| reatom       |   9.15 KB |   4.03 KB |
-| **triggery** |  **15.49 KB** |   **5.58 KB** |
-| rxjs         |  29.95 KB |   9.52 KB |
-| redux-thunk  |  25.42 KB |   9.84 KB |
-| effector     |  22.71 KB |  10.01 KB |
-| rtk-listener |  29.39 KB |  11.28 KB |
-| xstate       |  43.96 KB |  14.57 KB |
-| redux-saga   |  41.49 KB |  15.69 KB |
+| naked        |   4.53 KB |   1.88 KB |
+| reatom       |  10.41 KB |   4.44 KB |
+| **triggery** |  **17.15 KB** |   **6.04 KB** |
+| effector     |  24.10 KB |  10.48 KB |
+| redux-thunk  |  27.03 KB |  10.29 KB |
+| rtk-listener |  31.16 KB |  11.73 KB |
+| rxjs         |  31.37 KB |   9.93 KB |
+| redux-saga   |  43.17 KB |  16.14 KB |
+| xstate       |  46.27 KB |  15.12 KB |
 
 ### Performance
 
-Two shapes per engine: **throughput** (1000 sequential `setField` calls, microtasks flushed once at the end — models typing into a form) and **per-update latency** (one `setField`, await snapshot subscription fire, measure round-trip). Median of 5 trials, M1 Pro / Node 20.
+Throughput = 1000 sequential `setField('name', …)` calls flushed once at the end (models typing into one field). Latency = one `setField`, await snapshot subscriber fire, measure round-trip. Median of 5 trials, M1 Pro / Node 20. Numbers vary ±10-15% between runs.
 
-| engine                 | throughput | p50 lat. | p95 lat. | p99 lat. |
+| engine | throughput | p50 lat. | p95 lat. | p99 lat. |
 |---|---:|---:|---:|---:|
-| Naked baseline         |  997k ops/sec |  0.38 µs |  0.46 µs |   1.2 µs |
-| RxJS                   |  305k ops/sec |   2.0 µs |   2.1 µs |   2.7 µs |
-| Reatom                 |  214k ops/sec |   2.0 µs |    16 µs |    53 µs |
-| **Triggery**           |  **205k ops/sec** |   **2.6 µs** |   **3.6 µs** |   **25 µs** |
-| Redux + thunk          |  100k ops/sec |   7.8 µs |   8.6 µs |    19 µs |
-| Redux + saga           |   80k ops/sec |   7.7 µs |   8.5 µs |    12 µs |
-| XState                 |   71k ops/sec |   4.3 µs |   6.0 µs |    15 µs |
-| Effector               |   61k ops/sec |   6.2 µs |   8.0 µs |    22 µs |
-| RTK listenerMiddleware |   20k ops/sec |   9.5 µs |    12 µs |    37 µs |
+| Naked baseline         | 1570k ops/sec |  0.42 µs |  0.46 µs |  0.54 µs |
+| **RxJS**               |  **276k ops/sec** |   **2.3 µs** |   **2.5 µs** |   **6.7 µs** |
+| Reatom                 |  211k ops/sec |   2.1 µs |   2.7 µs |   5.9 µs |
+| **Triggery**           |  **206k ops/sec** |   **2.6 µs** |   **3.2 µs** |   **7.0 µs** |
+| Redux + thunk          |   84k ops/sec |   9.4 µs |    10 µs |    23 µs |
+| XState                 |   65k ops/sec |   6.3 µs |   8.9 µs |    27 µs |
+| Effector               |   51k ops/sec |   6.0 µs |   7.6 µs |    16 µs |
+| Redux + saga           |   51k ops/sec |   9.7 µs |    11 µs |    26 µs |
+| RTK listenerMiddleware |   32k ops/sec |    11 µs |    12 µs |    31 µs |
 
-> Numbers vary ±10–15% between runs. Treat as an honest snapshot.
-
-RxJS wins this scenario's perf — a `Subject<Action>` + `scan` reducer is essentially the same as the naked baseline with a thin operator wrapper, no observers, no graph propagation. Triggery's sync-handler path lands 3rd; reatom is the surprise on p99 latency (53 µs — atom recomputation on every field write costs).
+RxJS still wins this scenario's perf — a `Subject<Action>` + `scan` reducer is essentially the naked baseline plus a thin operator wrapper. Triggery sync-handler ties Reatom for second among libraries. xstate scaled down — every SET_FIELD now triggers 4 `cancel + raise` action lists per event.
 
 ### API surface — concepts you have to learn
 
 | engine | unique imports | symbols | primitive constructors |
 |---|---:|---:|---|
 | naked        | 0 | 0 | (pure JS) |
-| **triggery** | **1** | **2** | **`createTrigger`×1, `createRuntime`×1** |
-| reatom       | 1 | 3 | `atom`×6, `action`×6, `createCtx`×1 |
-| effector     | 1 | 5 | `createEvent`×11, `createStore`×5, `createEffect`×2, `sample`×6, `combine`×1 |
-| rtk-listener | 1 | 5 | `createAction`×1, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×4 |
+| **triggery** | **1** | **2** | **`createTrigger`×2, `createRuntime`×1** |
+| reatom       | 1 | 3 | `atom`×9, `action`×6, `createCtx`×1 |
+| effector     | 1 | 5 | `createEvent`×11, `createStore`×8, `createEffect`×4, `sample`×6, `combine`×1 |
+| rtk-listener | 1 | 5 | `createAction`×1, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×6 |
 | redux-thunk  | 1 | 5 | `createSlice`×1 + 4 thunk creators |
 | xstate       | 1 | 7 | `setup`, `createMachine`, `createActor`, `assign`, `fromPromise`, `raise`, `cancel` |
 | redux-saga   | 3 | 11 | `createSlice` + 6 effects (`all`, `call`, `debounce`, `put`, `select`, `takeEvery`) + saga middleware |
-| rxjs         | 2 | 18 | `Subject`, `BehaviorSubject` + 13 operators (`scan`, `debounceTime`, `switchMap`, `withLatestFrom`, `filter`, `map`, `tap`, `merge`, `distinctUntilChanged`, `startWith`, `combineLatest`, `defer`, `from`) |
+| rxjs         | 2 | 18 | `Subject`, `BehaviorSubject` + 16 operators (`scan`, `debounceTime`×3, `switchMap`×3, `filter`×many, `tap`, `merge`, …) |
 
 ### Complexity & type safety
 
 | engine | cyclomatic | max nesting | `as` casts | `!` non-null |
 |---|---:|---:|---:|---:|
-| rtk-listener |    17 |       6 | 11 |  0 |
-| redux-saga   |    17 |       6 |  7 |  0 |
-| **xstate**   |    **20** |       **8** |  **4** |  **0** |
-| naked        |    22 |       7 |  1 |  0 |
-| reatom       |    22 |       6 |  1 |  0 |
-| redux-thunk  |    24 |       6 |  4 |  0 |
-| effector     |    25 |       6 | 11 |  0 |
-| rxjs         |    26 |       7 |  3 |  0 |
-| **triggery** |    **29** |       **9** |  **3** |  **0** |
+| rtk-listener |    30 |       6 | 18 |  0 |
+| redux-saga   |    30 |       6 |  7 |  0 |
+| naked        |    36 |       7 |  1 |  0 |
+| reatom       |    36 |       7 |  1 |  0 |
+| **xstate**   |    36 |       8 |  4 |  0 |
+| rxjs         |    37 |       7 |  5 |  0 |
+| effector     |    38 |       6 | 10 |  0 |
+| redux-thunk  |    43 |       7 |  4 |  0 |
+| **triggery** |    **46** |       **9** |  **3** |  **0** |
 
-The cyclomatic flip is the headline of this scenario. **Triggery has the highest cyclomatic** because its handler is one big switch over event names — every transition is an `if` / `case` / sequential check. **xstate is 3rd-lowest** because its transitions are declarative: `target: 'profile', guard: 'accountValid'` reads as a tuple, not as a branch the cyclomatic counter sees. The `as` casts on rtk-listener / effector are mostly state-typing boilerplate (`getState() as State`).
+Triggery's cyclomatic still tops the matrix — the two `switch`-shaped handlers concentrate every branch in two spots. Splitting the handler into 4-5 smaller triggers (one per async field, one per navigation event) would distribute the cyclomatic across functions but the file-wide counter would stay the same. The trade-off is honest: fewer lines, denser branches.
+
+### Scalability — adding 2 more async fields to a 1-async-field wizard
+
+Diff between v1 (email only) and v2 (email + username + referral) per engine:
+
+| engine | v1 LOC | v2 LOC | Δ | shape of the change |
+|---|---:|---:|---:|---|
+| **effector**   | 210 | 250 | **+40** | new event + store + sample chain — graph extension reuses the existing sample pattern |
+| rxjs           | 205 | 258 | +53 | two new `filter + debounceTime + switchMap` streams + new reducer cases |
+| **triggery**   | 163 | 219 | **+56** | one `actions.debounce(N).checkX()` per field + matching `*-check-done` event case |
+| redux-saga     | 193 | 249 | +56 | two more `debounce(ms, action, saga)` + matching sagas |
+| reatom         | 169 | 230 | +61 | two more timer handles + 2 reqIds + 2 `scheduleX` functions |
+| redux-thunk    | 189 | 253 | +64 | two more setTimeout handles inside the field thunk + 2 reqIds |
+| rtk-listener   | 195 | 260 | +65 | two more `startListening({ predicate, effect: cancel+delay+await })` blocks |
+| **xstate**     | 283 | 376 | **+93** | 2 × `cancel(id)` + 2 × `raise(EV, { delay, id })` + 2 × invoked-actor pattern + 2 × `*Checked` actions + extended context |
+
+**Effector and Triggery scale best**; **xstate scales worst**. The reasons say something about each library's mental model:
+
+- **Effector** has the right primitive (`createEffect` + `sample(...).filter(...).target(effect)`) to make "another async field" be the same shape as the first.
+- **Triggery** has it too — `actions.debounce(N).checkX()` is the vocabulary, and adding a third field is one declaration line + one event case. Despite splitting state-update logic across two triggers (editing + nav), the absolute LOC stays the lowest in the matrix.
+- **xstate** doesn't have a primitive for "debounced async with race-id guard"; it has lower-level building blocks (`raise`, `cancel`, `invoke + fromPromise`) that each new field has to assemble from scratch.
 
 <!-- END: measurements -->
 
 ## How to read these numbers
 
-Wizard-form is the **opposite scenario** to notifications-pipeline: there, gating + throttle + debounce + fan-out across many events; here, multi-step navigation with branching + async validation + draft persistence. The shape of the problem reshuffles the leaderboard.
+Wizard-form is the **opposite scenario** to notifications-pipeline: there, gating + throttle + debounce + fan-out across many events; here, multi-step navigation **with three independent async-validated fields, each with its own race-conditions**. The shape of the problem reshuffles the leaderboard.
 
-- **XState is the readability winner, even though it's the verbose loser.** 283 LOC, 14.57 KB gz, 71k op/sec — easily the worst on size and perf. But the file reads as a **statechart**: `account → profile → (team-size | preferences) → review → submitting → success` is right there, transitions, guards, invoked actors. The 3rd-lowest cyclomatic complexity is real: state-machine modelling hides branching in `target` + `guard` tuples that the counter doesn't count as conditionals. If your wizard has 10 states and 30 transitions, this is the engine where adding the 31st is the easiest to reason about.
-- **Triggery wins LOC + API surface but pays in cyclomatic.** One switch-on-event handler is the most compact translation of the spec, but it concentrates every `if` / `case` in one place. Splitting the switch into one trigger-per-event would lower cyclomatic and raise LOC — same trade-off seen everywhere, just made explicit here.
-- **RxJS is the perf winner** (305k op/sec, 2.0 µs latency). A `Subject<Action>` + `scan` reducer is basically the naked baseline plus an operator wrapper — minimal extra cost per dispatch.
-- **Reatom keeps its bundle crown.** 4.03 KB gz, narrowly above naked. Atom-as-direct-call is the tightest packaging in the matrix.
-- **Effector is graph-heavy in this shape.** 11 `createEvent`s, 5 stores, 6 samples to wire a 5-state machine — every transition adds a sample, every condition needs `filter` + `fn`. 210 LOC, 61k op/sec. If your domain is dataflow (streams in, streams out), effector pays back; for FSM-shaped problems it's the most-typed-out.
-- **RTK listener-middleware lands last on every perf axis** (20k op/sec, 9.5 µs p50). The async listeners + `cancelActiveListeners()` + `delay()` machinery has the heaviest per-dispatch cost. Familiar, expensive.
-- **Redux-thunk is the perf-leader of the Redux family** (100k op/sec) — same pattern that won notifications-pipeline. Thin dispatch path > heavy listener / saga scaffolding.
+- **Triggery wins LOC + API surface + bundle (after reatom).** `actions.debounce(N).checkX()` is the **declarative primitive** for "fire async after a quiet period" — adding the second and third async fields costs ≈ 5 LOC each. Every other engine has to hand-roll some equivalent: `setTimeout` + clearTimeout + closure-held reqId counter, or `cancelActiveListeners() + delay()`, or `cancel(id) + raise(EV, { delay, id })`, or `debounce(ms, action, saga)`.
+- **Effector tied Triggery on scaling**, and would win it outright if you'd accept patronum (we excluded it for apples-to-apples). The reactive-graph shape scales linearly when you keep adding "one more stream of events" but loses on raw perf (51k op/sec — graph propagation cost per `setField`).
+- **xstate is the readability winner for the state-machine spine** (the 5-state wizard graph is right there in the file), but **doesn't help with debounced async fields** — those live as `raise + cancel` actions inside the machine, not as state nodes, and each one costs the same boilerplate as in any other engine. If your scenario is "lots of states, no async fields", xstate's home turf. If your scenario is "few states, many async fields", Triggery's home turf.
+- **RxJS wins perf** (276k op/sec, 2.3 µs p50) — same reason as v1: a `Subject<Action>` + `scan` reducer is the minimal viable reactive system.
+- **Reatom keeps its bundle crown** (4.44 KB gz) — atom-as-direct-call is still the tightest packaging.
+- **Redux family**: redux-thunk leads its family by a comfortable margin on perf (84k vs rtk's 32k); redux-saga's `debounce` effect gives the cleanest per-field one-liner of the three but pays in the heaviest bundle (16 KB gz).
 
-**Where Triggery makes sense over the alternatives for wizard-form:**
+**Where Triggery makes sense for wizard-form:**
 
-1. You want the smallest code (LOC) + smallest concept budget (2 symbols), and the cyclomatic of a single switch handler is fine to live with.
-2. You want triggery anyway for other scenarios and don't want to add a second library just for the wizard.
-3. The wizard is small enough that statechart-overhead would dominate.
+1. Your wizard has multiple async-validated fields (3+) — the gap over xstate / redux opens up linearly.
+2. You want the smallest concept budget (2 imported symbols) for new joiners.
+3. You don't need a statechart visualizer — the spec is short enough to read directly.
 
-**Where Triggery isn't the right tool for wizard-form:**
+**Where Triggery isn't the right tool:**
 
-- If your wizard is **complex enough that a visualisable statechart pays back** (10+ states, error/retry sub-machines, hierarchical states, parallel regions) — that's xstate's home turf, and the LOC/bundle cost is worth it.
-- If you're already deep in Redux — pick the variant your team speaks (thunk for compactness, saga for effect-as-data, listenerMiddleware for "the official RTK way").
+- If your wizard has 10+ states with parallel regions, hierarchical sub-machines, history nodes — that's xstate's home turf.
+- If the form is so simple that a single `useReducer` does it — don't add a library.
 
 ## Per-engine notes
 
 ### `triggery`
 
-One trigger, sync schedule, switch-on-event handler. State lives in a closure — triggery's `conditions` map isn't used (a form is a form, not a graph). Triggery's value here is **`actions.debounce(500).checkEmail()` and `actions.debounce(1000).saveDraft()`** — declarative debounce primitives that other handler-shaped engines (naked / thunk / reatom) have to hand-roll. Async work (`checkEmailAvailable`, `submitWizard`) lives in action subscribers, results feed back via dedicated events (`email-check-done`, `submit-done`). The big switch keeps the LOC count tight but pushes the cyclomatic count up.
+Two triggers — `editing` (handles `field-changed` + 3 async-result events + `load-draft`) and `nav` (handles `next` / `back` / `submit` / `submit-done` / `reset`). State is a closure (a form is a form, not a graph); both triggers mutate it and emit fresh snapshots through dedicated `snapshot` actions. The R4 vocabulary — `actions.debounce(N).checkX?.(payload)` — collapses what other engines spell out as "schedule a timer + cancel the old one + start a new race-id". Async work runs in plain `runtime.subscribeAction('editing', 'checkEmail', async (p) => …)` subscribers, results feed back as dedicated events with `reqId` tags that the handler checks against the current counter.
 
 ### `xstate`
 
-The shape this library was built for. `setup({ guards, actions, actors })` declares the vocabulary; `.createMachine({ states: {...} })` declares the wiring. Conditional branching (R3) is two transitions on the same event with different `guard`s. Debounce (R4 + R5) uses `raise({ delay, id })` + `cancel(id)` — XState's first-class scheduled action; no timer handles. Async submit is an invoked `fromPromise(...)` actor. All this costs **283 LOC** (the most) and **14.57 KB gz** (2nd most) — XState is not free — but the **statechart you'd draw on a whiteboard is literally the code**.
+The state machine is right there: `account → profile → (team-size | preferences) → review → submitting → success`. Conditional branching is two transitions with different guards. Async submit is an invoked `fromPromise` actor. **Async-field debounce uses `cancel('id') + raise(EV, { delay, id })` per field × 3** — this scales linearly and is the dominant cost of going from 1 to 3 async fields. xstate's strength is the wizard's spine; its weakness is the per-field machinery.
 
 ### `effector`
 
-11 events, 5 stores, 6 `sample`s, 1 `combine` for the snapshot. Every state-change rule is "event → filter → store mutation"; every async is an effect. The graph is small enough to fit in the file but each piece is wired explicitly. Effector pays for its dataflow purity in LOC (210, second-most) and per-event latency (6.2 µs).
+11 events, 8 stores, 4 effects, 6 samples. Each new async field is "one event + one store + one effect + one sample chain" — uniform shape, which is why it scales best in the matrix. The throughput tax (51k op/sec) is the reactive-graph propagation cost: every `fieldChanged` walks the graph.
 
 ### `rxjs`
 
-`Subject<Action>` upstream, `scan(reduce, initialSnapshot)` for the reducer, separate streams for the async side-effects (`switchMap` for email check, `debounceTime` + `withLatestFrom` for draft save). The reducer-shape gives RxJS the best perf in this matrix because there's no graph propagation — just synchronous Subject + scan + observers. 18 imported symbols is the steepest API surface; if you already think in marbles, the operator pipeline is concise.
+`Subject<Action>` upstream, `scan(reduce, initialSnapshot)` reducer, separate `filter + debounceTime + switchMap` streams per async field. The reducer-shape gives the best perf (276k op/sec) and the worst API surface (18 imported symbols across 13 operators).
 
 ### `reatom`
 
-6 atoms + 6 actions; `snapshotAtom` is a computed atom that spies the others. Async (email, submit) inside an `action(async (c) => ...)`. Timers hand-rolled (reatom v3 has no built-in debounce). Smallest bundle in the matrix.
+9 atoms + 6 actions; `snapshotAtom` spies them all. The atom-as-direct-call API is the densest in the matrix (smallest bundle, 4.44 KB gz). Async fields are hand-rolled timer + reqId per field — reatom v3 has no built-in debounce.
 
 ### `rtk-listener`
 
-One slice + a couple of input actions + 4 listeners. Email + draft debounce use `cancelActiveListeners()` + `delay()` — idiomatic RTK. Async submit is a listener that awaits `submitWizard`. The official RTK way; loses on perf because every cancel + delay round-trip is expensive.
+One slice + 6 listeners (3 async fields + 1 draft + 1 submit + 1 router). Per-field debounce uses `cancelActiveListeners() + delay()` — clean idiom but high per-event cost (32k op/sec, the slowest in the matrix). 18 `as` casts (most in matrix) — the `getState() as State` pattern stacks up across listeners.
 
 ### `redux-thunk`
 
-One slice + 4 thunks. Each thunk is a function that reads `getState()`, decides, dispatches. Email + draft debounce are hand-rolled `setTimeout` handles in a closure (vanilla thunk has no scheduling). Async submit is `async (dispatch, getState) => { ... await ... ; dispatch(setSubmit(...)); }`. The Redux family's perf leader.
+One slice + 4 thunks. Each async field is a `setTimeout` handle + reqId counter held in the factory closure. Best Redux-family perf (84k op/sec) — the thin dispatch path keeps overhead low.
 
 ### `redux-saga`
 
-`debounce(500, setField, emailCheckSaga)` for email — saga's built-in debounce effect cancels prior in-flight calls automatically (no manual `cancelActiveListeners`). Same trick for draft save. `takeEvery` for `nextClicked` / `backClicked` / `submitClicked`. The cleanest one-liner debounce in the matrix.
+`debounce(ms, action, saga)` × 3 — the cleanest per-field one-liner in the matrix for "debounced async with auto-supersession". Pays in bundle (16 KB gz, the heaviest) and throughput (51k op/sec).
 
 ### `naked`
 
-Mutable `state` object, a Set of subscribers, two `setTimeout` handles for email + draft debounce, one counter for the email-race guard. The honesty of the comparison: 139 LOC and 1.49 KB gz baseline; you'd be perfectly fine writing this for one wizard, **until** the second one lands.
+3 setTimeout handles + 3 reqId counters + 3 `scheduleX` functions, all in a closure. The honest reference: every other engine's "extra LOC per async field" is essentially this exact pattern, repeated in their library's vocabulary.
