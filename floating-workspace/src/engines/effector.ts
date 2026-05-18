@@ -9,7 +9,7 @@ import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
   appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
   clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
-  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  defaultFloatingGeometry, defaultInspectorMode, defaultTitle, emptySnapshot, equalizeTree, findContainer,
   findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
   removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
@@ -80,7 +80,7 @@ export const effectorFactory: EngineFactory = {
           body: p.opts?.body ?? defaultBody(p.kind),
           mode,
           ...defaultFloatingGeometry(p.kind),
-          ...(p.kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+          ...(p.kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
         };
         resolver?.(id);
         const panels = { ...s.panels, [id]: panel };

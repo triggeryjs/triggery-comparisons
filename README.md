@@ -12,6 +12,21 @@ Side-by-side, honest comparisons of orchestration libraries on identical real-wo
 | [`wizard-form`](./wizard-form) | ✅ shipped | + xstate (9 implementations total) |
 | [`floating-workspace`](./floating-workspace) | ✅ shipped | 9 engines — IDE-like window manager: tree-based tiling + per-panel mode toggle + panel-to-panel snap + live inspectors + modals + keyboard |
 
+### Preview _(wip)_
+
+<table>
+<tr>
+<td width="33%" align="center"><a href="./notifications-pipeline"><img src="./notifications-pipeline/docs/screenshots/02-active-channel.png" alt="Notifications pipeline — Discord-like chat with throttled toasts + debounced sound"></a></td>
+<td width="33%" align="center"><a href="./wizard-form"><img src="./wizard-form/docs/screenshots/02-async-validation.png" alt="Wizard form — multi-step onboarding with 3 async-validated fields"></a></td>
+<td width="33%" align="center"><a href="./floating-workspace"><img src="./floating-workspace/docs/screenshots/02-tiling-inspectors.png" alt="Floating workspace — tree-based tiling with 4 live inspector modes"></a></td>
+</tr>
+<tr>
+<td align="center"><a href="./notifications-pipeline"><b>notifications-pipeline</b></a></td>
+<td align="center"><a href="./wizard-form"><b>wizard-form</b></a></td>
+<td align="center"><a href="./floating-workspace"><b>floating-workspace</b></a></td>
+</tr>
+</table>
+
 More to come (`debounced-search`, others). PRs welcome.
 
 ## Headline results

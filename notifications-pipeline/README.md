@@ -2,6 +2,21 @@
 
 A Discord-like chat client. Messages arrive over a (mocked) WebSocket; the client has to gate, throttle, debounce and fan them out into the right side-effects. Same UI, six implementations, one frozen spec.
 
+## Screenshots _(wip — preview only)_
+
+<table>
+<tr>
+<td width="33%"><img src="./docs/screenshots/01-hero.png" alt="Empty chat client with channels, settings, simulator panel"></td>
+<td width="33%"><img src="./docs/screenshots/02-active-channel.png" alt="General channel with messages, sound log showing 'beep', unread counters in channels list"></td>
+<td width="33%"><img src="./docs/screenshots/03-burst-channels.png" alt="Engineering channel after burst — multiple messages, @-me mention highlighted, 3 debounced sound beeps logged"></td>
+</tr>
+<tr>
+<td>Empty hero — engine picker, channels, settings panel, simulator buttons (One msg / @-mention / Burst of 10 / Disconnect 2 s).</td>
+<td>Active <code>#general</code> after a few sends — sound log shows a single <code>beep</code> (debounced to 1 per 600 ms regardless of how many messages arrived).</td>
+<td>After a burst into <code>#engineering</code> — channel unread counters spread across the sidebar; <code>@me</code> mention at the bottom; throttle kept the audible sound log to ~3 fires.</td>
+</tr>
+</table>
+
 ## Headline numbers
 
 For the 15-rule scenario in this folder (see [acceptance spec](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.

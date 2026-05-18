@@ -2,6 +2,21 @@
 
 A multi-step onboarding wizard with **three async-validated fields** (email + username + referral-code lookup), conditional branching (manager → team-size, everyone else → preferences), debounced draft persistence, and an async submit. Same UI, **nine implementations**, one frozen spec.
 
+## Screenshots _(wip — preview only)_
+
+<table>
+<tr>
+<td width="33%"><img src="./docs/screenshots/01-step1-empty.png" alt="Step 1 with empty fields and engine picker at the top"></td>
+<td width="33%"><img src="./docs/screenshots/02-async-validation.png" alt="Step 1 with filled fields and resolved async messages: Email is available, Username is yours"></td>
+<td width="33%"><img src="./docs/screenshots/03-step2-referral.png" alt="Step 2 with Designer role selected, TRIGGERY referral code resolved to 'Referred by Triggery Team'"></td>
+</tr>
+<tr>
+<td>Step 1 — engine picker on top, step progress bar (Step 1 of 4), empty form.</td>
+<td>Async validation resolved: "Email is available" / "Username is yours" appear after the 350 ms debounce window.</td>
+<td>Step 2 — step 1 is green (completed valid), step 2 purple (current), referral code resolved.</td>
+</tr>
+</table>
+
 ## Headline numbers
 
 For the spec in this folder (see [acceptance behaviour](#acceptance-behaviour-the-spec--frozen) below). "naked" is excluded from the leader column — it's a no-library baseline, not a competitor.

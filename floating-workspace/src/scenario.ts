@@ -44,6 +44,17 @@ function bumpOpenCounter(): number {
   return openCounter;
 }
 
+/** Default inspector mode rotates cursor → tree → state → static, then repeats.
+ *  This way the first 4 inspectors a user opens showcase all 4 live modes
+ *  without having to click any pills. */
+const INSPECTOR_MODE_ROTATION: InspectorMode[] = ['cursor', 'tree', 'state', 'static'];
+let inspectorCounter = 0;
+export function defaultInspectorMode(): InspectorMode {
+  const m = INSPECTOR_MODE_ROTATION[inspectorCounter % INSPECTOR_MODE_ROTATION.length]!;
+  inspectorCounter += 1;
+  return m;
+}
+
 export function defaultTitle(kind: PanelKind): string {
   const n = openCounter; // already bumped by defaultPanelLayout caller
   return kind === 'note' ? `Note ${n}` : `Inspector ${n}`;

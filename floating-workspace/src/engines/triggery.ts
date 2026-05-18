@@ -11,7 +11,7 @@ import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
   appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
   clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
-  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  defaultFloatingGeometry, defaultInspectorMode, defaultTitle, emptySnapshot, equalizeTree, findContainer,
   findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
   removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
@@ -103,7 +103,7 @@ export const triggeryFactory: EngineFactory = {
           body: opts?.body ?? defaultBody(kind),
           mode,
           ...defaultFloatingGeometry(kind),
-          ...(kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+          ...(kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
         };
         mutate((s) => {
           const panels = { ...s.panels, [id]: panel };

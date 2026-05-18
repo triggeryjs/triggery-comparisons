@@ -12,7 +12,7 @@ import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
   appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
   clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
-  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  defaultFloatingGeometry, defaultInspectorMode, defaultTitle, emptySnapshot, equalizeTree, findContainer,
   findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
   removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
@@ -83,7 +83,7 @@ function reduce(
         body: action.opts?.body ?? defaultBody(action.kind),
         mode,
         ...defaultFloatingGeometry(action.kind),
-        ...(action.kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+        ...(action.kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
       };
       resolver?.(id);
       const panels = { ...state.panels, [id]: panel };

@@ -18,6 +18,7 @@ import {
   clearPersistedLayout,
   defaultBody,
   defaultFloatingGeometry,
+  defaultInspectorMode,
   defaultTitle,
   emptySnapshot,
   equalizeTree,
@@ -103,7 +104,7 @@ export const nakedFactory: EngineFactory = {
           body: opts?.body ?? defaultBody(kind),
           mode,
           ...defaultFloatingGeometry(kind),
-          ...(kind === 'inspector' ? { inspectorMode: 'static' } : {}),
+          ...(kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
         };
         const panels = { ...state.panels, [id]: panel };
         if (mode === 'tiled') {

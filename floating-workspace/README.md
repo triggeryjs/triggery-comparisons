@@ -4,6 +4,21 @@ A real-prototype-grade IDE-like window manager — **tree-based tiling** (drag a
 
 This is the hardest scenario in the repo. Pointer events at 60 fps are a stream; the layout is a recursive tree (`Container | Leaf`); per-panel mode flips reshape tree and floating-z-order atomically; keyboard routing is event dispatch; promise-returning modals are async glue. Each library is good at one or two of those four and pays for the others. The leaderboard reshuffles accordingly — read on for an honest spread.
 
+## Screenshots _(wip — preview only)_
+
+<table>
+<tr>
+<td width="33%"><img src="./docs/screenshots/01-hero.png" alt="Empty hero state with engine picker + Note/Inspector/⌘K buttons in the top bar"></td>
+<td width="33%"><img src="./docs/screenshots/02-tiling-inspectors.png" alt="Five tiles in a row showing all 4 inspector modes side by side (cursor, tree, state, static) plus a note"></td>
+<td width="33%"><img src="./docs/screenshots/03-mixed-modes.png" alt="Mixed layout: floating Note 4 panel overlaid on top of a tiled column+row tree with 4 inspectors"></td>
+</tr>
+<tr>
+<td>Empty hero — engine picker at the top, primary actions front-and-centre.</td>
+<td>Five tiles split into a row; new inspectors open in <code>cursor → tree → state → static</code> rotation so all 4 live modes show at once.</td>
+<td>Floating + tiled mix — the same panel switches mode via the title-bar <code>↗ / ⇲</code> button; the tree reshapes atomically.</td>
+</tr>
+</table>
+
 ## Headline numbers
 
 |                                  | best                                     | worst                                | triggery |

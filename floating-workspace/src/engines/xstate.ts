@@ -10,7 +10,7 @@ import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
   appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
   clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody,
-  defaultFloatingGeometry, defaultTitle, emptySnapshot, equalizeTree, findContainer,
+  defaultFloatingGeometry, defaultInspectorMode, defaultTitle, emptySnapshot, equalizeTree, findContainer,
   findLeaf, flattenPanelIds, genId, getViewport, persistLayout, readPersistedLayout,
   removeFromTree, resizeContainerDivider, setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
@@ -90,7 +90,7 @@ function createMachine() {
               body: event.opts?.body ?? defaultBody(event.kind),
               mode,
               ...defaultFloatingGeometry(event.kind),
-              ...(event.kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+              ...(event.kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
             };
             const panels = { ...context.panels, [event.id]: panel };
             if (mode === 'tiled') return { panels, tree: appendToTreeRight(context.tree, event.id), focused: event.id };

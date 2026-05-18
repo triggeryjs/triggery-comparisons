@@ -7,7 +7,7 @@ import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import {
   appendToTreeRight, buildColumn, buildMosaic, buildRow, cascadeFloating,
   clampPanelToViewport, clampResize, defaultBody, defaultFloatingGeometry,
-  defaultTitle, emptySnapshot, equalizeTree, findContainer, findLeaf,
+  defaultInspectorMode, defaultTitle, emptySnapshot, equalizeTree, findContainer, findLeaf,
   flattenPanelIds, genId, getViewport, removeFromTree, resizeContainerDivider,
   setContainerSizes, snapFloating, splitAt,
 } from '../scenario';
@@ -41,7 +41,7 @@ export const slice = createSlice({
         body: a.payload.opts?.body ?? defaultBody(a.payload.kind),
         mode,
         x: geo.x, y: geo.y, w: geo.w, h: geo.h,
-        ...(a.payload.kind === 'inspector' ? { inspectorMode: 'static' as InspectorMode } : {}),
+        ...(a.payload.kind === 'inspector' ? { inspectorMode: defaultInspectorMode() } : {}),
       };
       s.panels[id] = panel;
       if (mode === 'tiled') {
