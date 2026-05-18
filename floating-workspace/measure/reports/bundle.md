@@ -2,7 +2,7 @@
 |---|---:|---:|
 | naked        |  11.86 KB |   4.21 KB |
 | reatom       |  17.73 KB |   6.71 KB |
-| triggery     |  23.55 KB |   8.23 KB |
+| triggery     |  23.19 KB |   8.04 KB |
 | effector     |  25.80 KB |  10.45 KB |
 | redux-thunk  |  35.33 KB |  12.66 KB |
 | rtk-listener |  39.33 KB |  14.12 KB |

@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-05-18T09:29:23.858Z",
+  "measuredAt": "2026-05-18T09:44:02.266Z",
   "rows": [
     {
       "engine": "naked",
@@ -48,10 +48,10 @@
         "createRuntime": 1
       },
       "primitivesTotal": 2,
-      "cyclo": 93,
-      "nesting": 9,
-      "asCasts": 4,
-      "nonNull": 3
+      "cyclo": 88,
+      "nesting": 8,
+      "asCasts": 3,
+      "nonNull": 4
     },
     {
       "engine": "reatom",

@@ -6,8 +6,8 @@
 | rtk-listener |    33 |       7 |  1 |  0 |
 | redux-thunk  |    36 |       6 |  1 |  0 |
 | _redux-slice |    65 |       5 |  2 |  3 |
+| triggery     |    88 |       8 |  3 |  4 |
 | xstate       |    92 |      11 |  2 |  3 |
-| triggery     |    93 |       9 |  4 |  3 |
 | naked        |    94 |       8 |  1 |  4 |
 | effector     |    94 |       7 |  2 |  3 |
 | reatom       |    94 |       9 |  2 |  3 |
