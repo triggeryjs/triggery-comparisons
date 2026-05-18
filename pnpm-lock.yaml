@@ -66,6 +66,70 @@ importers:
         specifier: ^8.0.13
         version: 8.0.13(esbuild@0.25.12)(tsx@4.22.1)
 
+  wizard-form:
+    dependencies:
+      '@reatom/core':
+        specifier: ^3.10.3
+        version: 3.10.3
+      '@reduxjs/toolkit':
+        specifier: ^2.12.0
+        version: 2.12.0(react-redux@9.3.0(@types/react@19.2.14)(react@19.2.6)(redux@5.0.1))(react@19.2.6)
+      '@triggery/core':
+        specifier: ^0.10.0
+        version: 0.10.0
+      '@triggery/react':
+        specifier: ^0.10.0
+        version: 0.10.0(@triggery/core@0.10.0)(react@19.2.6)
+      '@xstate/react':
+        specifier: ^6.0.0
+        version: 6.1.0(@types/react@19.2.14)(react@19.2.6)(xstate@5.31.1)
+      effector:
+        specifier: ^23.2.3
+        version: 23.4.4
+      effector-react:
+        specifier: ^23.2.3
+        version: 23.3.0(effector@23.4.4)(react@19.2.6)
+      react:
+        specifier: ^19.2.6
+        version: 19.2.6
+      react-dom:
+        specifier: ^19.2.6
+        version: 19.2.6(react@19.2.6)
+      react-redux:
+        specifier: ^9.3.0
+        version: 9.3.0(@types/react@19.2.14)(react@19.2.6)(redux@5.0.1)
+      redux-saga:
+        specifier: ^1.3.0
+        version: 1.4.3
+      rxjs:
+        specifier: ^7.8.1
+        version: 7.8.2
+      xstate:
+        specifier: ^5.22.0
+        version: 5.31.1
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.14
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.14)
+      '@vitejs/plugin-react':
+        specifier: ^6.0.2
+        version: 6.0.2(vite@8.0.13(esbuild@0.25.12)(tsx@4.22.1))
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
+      tsx:
+        specifier: ^4.22.1
+        version: 4.22.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.0.13
+        version: 8.0.13(esbuild@0.25.12)(tsx@4.22.1)
+
 packages:
 
   '@babel/runtime@7.29.2':
@@ -568,6 +632,15 @@ packages:
       babel-plugin-react-compiler:
         optional: true
 
+  '@xstate/react@6.1.0':
+    resolution: {integrity: sha512-ep9F0jGTI63B/jE8GHdMpUqtuz7yRebNaKv8EMUaiSi29NOglywc2X2YSOV/ygbIK+LtmgZ0q9anoEA2iBSEOw==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      xstate: ^5.28.0
+    peerDependenciesMeta:
+      xstate:
+        optional: true
+
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
@@ -775,6 +848,15 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  use-isomorphic-layout-effect@1.2.1:
+    resolution: {integrity: sha512-tpZZ+EX0gaghDAiFR37hj5MgY6ZN55kLiPkJsKxBMZ6GZdOSPJXiOzPM984oPYZ5AnehYx5WQp1+ME8I/P/pRA==}
+    peerDependencies:
+      '@types/react': '*'
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+
   use-sync-external-store@1.6.0:
     resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
     peerDependencies:
@@ -822,6 +904,9 @@ packages:
         optional: true
       yaml:
         optional: true
+
+  xstate@5.31.1:
+    resolution: {integrity: sha512-3P7t7GQ61BvLu+8Cj6Zq7rcS34vecL9pvfN2ucUWmIFIUG+rAREviOs4Xy4OO3BuJHSz6RLU8eqDXxSbVotjDQ==}
 
 snapshots:
 
@@ -1129,6 +1214,16 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.0.13(esbuild@0.25.12)(tsx@4.22.1)
 
+  '@xstate/react@6.1.0(@types/react@19.2.14)(react@19.2.6)(xstate@5.31.1)':
+    dependencies:
+      react: 19.2.6
+      use-isomorphic-layout-effect: 1.2.1(@types/react@19.2.14)(react@19.2.6)
+      use-sync-external-store: 1.6.0(react@19.2.6)
+    optionalDependencies:
+      xstate: 5.31.1
+    transitivePeerDependencies:
+      - '@types/react'
+
   csstype@3.2.3: {}
 
   detect-libc@2.1.2: {}
@@ -1352,6 +1447,12 @@ snapshots:
 
   typescript@6.0.3: {}
 
+  use-isomorphic-layout-effect@1.2.1(@types/react@19.2.14)(react@19.2.6):
+    dependencies:
+      react: 19.2.6
+    optionalDependencies:
+      '@types/react': 19.2.14
+
   use-sync-external-store@1.6.0(react@19.2.6):
     dependencies:
       react: 19.2.6
@@ -1367,3 +1468,5 @@ snapshots:
       esbuild: 0.25.12
       fsevents: 2.3.3
       tsx: 4.22.1
+
+  xstate@5.31.1: {}
