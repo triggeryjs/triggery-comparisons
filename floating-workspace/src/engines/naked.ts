@@ -7,9 +7,11 @@
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS,
+  DOCK_DEFAULT,
   MAX_PANELS,
   PERSIST_DEBOUNCE_MS,
   POINTER_THROTTLE_MS,
+  clampDockSize,
   clampPanelToViewport,
   clampResize,
   clearPersistedLayout,
@@ -20,11 +22,13 @@ import {
   filterCommands,
   genId,
   getViewport,
+  panelInDock,
   persistLayout,
   readPersistedLayout,
   snapToEdges,
 } from '../scenario';
 import type {
+  DockAnchor,
   FloatingPanel,
   ModalSpec,
   PanelKind,
@@ -152,8 +156,45 @@ export const nakedFactory: EngineFactory = {
 
       focus(id) {
         if (!state.panels[id]) return;
+        if (state.panels[id].dock !== null) {
+          state = { ...state, focused: id };
+          emit();
+          return;
+        }
         if (state.focused === id && state.zOrder[state.zOrder.length - 1] === id) return;
         moveTop(id);
+        emit();
+        schedulePersist();
+      },
+
+      dock(id, anchor) {
+        const panel = state.panels[id];
+        if (!panel) return;
+        // If the slot is occupied, kick out the existing dock-panel to floating.
+        const existing = panelInDock(state.panels, anchor);
+        let panels = state.panels;
+        let zOrder = state.zOrder;
+        if (existing && existing.id !== id) {
+          const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+          panels = { ...panels, [restored.id]: restored };
+          if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+        }
+        // Move this panel into the slot; remove from zOrder.
+        const docked: FloatingPanel = { ...panel, dock: anchor };
+        panels = { ...panels, [id]: docked };
+        zOrder = zOrder.filter((x) => x !== id);
+        state = { ...state, panels, zOrder, focused: id };
+        emit();
+        schedulePersist();
+      },
+
+      undock(id) {
+        const panel = state.panels[id];
+        if (!panel || panel.dock === null) return;
+        const floating: FloatingPanel = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+        const panels = { ...state.panels, [id]: floating };
+        const zOrder = state.zOrder.includes(id) ? state.zOrder : [...state.zOrder, id];
+        state = { ...state, panels, zOrder, focused: id };
         emit();
         schedulePersist();
       },
@@ -178,7 +219,7 @@ export const nakedFactory: EngineFactory = {
 
       startDrag(id, px, py) {
         const panel = state.panels[id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return; // docked panels don't drag
         moveTop(id);
         state = {
           ...state,
@@ -189,7 +230,7 @@ export const nakedFactory: EngineFactory = {
 
       startResize(id, px, py) {
         const panel = state.panels[id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return; // docked panels don't free-resize
         moveTop(id);
         state = {
           ...state,
@@ -203,6 +244,19 @@ export const nakedFactory: EngineFactory = {
         emit();
       },
 
+      startDockResize(anchor, px, py) {
+        state = {
+          ...state,
+          interaction: {
+            kind: 'dock-resize',
+            anchor,
+            startSize: state.dockSizes[anchor],
+            startPointer: anchor === 'bottom' ? py : px,
+          },
+        };
+        emit();
+      },
+
       pointerMove(px, py) {
         if (!state.interaction) return;
         const now = performance.now();
@@ -210,6 +264,18 @@ export const nakedFactory: EngineFactory = {
         lastMoveTime = now;
         const viewport = getViewport();
         const inter = state.interaction;
+        if (inter.kind === 'dock-resize') {
+          // Pointer delta along the perpendicular axis.
+          const cur = inter.anchor === 'bottom' ? py : px;
+          let delta = cur - inter.startPointer;
+          // left dock grows when pointer moves right; right & bottom dock grow
+          // when pointer moves *toward* their anchor — sign flips for right/bottom.
+          if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+          const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+          state = { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
+          emit();
+          return;
+        }
         const panel = state.panels[inter.id];
         if (!panel) return;
         if (inter.kind === 'drag') {
@@ -217,7 +283,7 @@ export const nakedFactory: EngineFactory = {
           const clamped = clampPanelToViewport(moved, viewport);
           const snapped = snapToEdges(clamped, viewport);
           setPanel(snapped);
-        } else {
+        } else if (inter.kind === 'resize') {
           const dx = px - inter.startPointer.x;
           const dy = py - inter.startPointer.y;
           const sized = clampResize(
@@ -268,13 +334,14 @@ export const nakedFactory: EngineFactory = {
       loadLayout() {
         const layout = readPersistedLayout();
         if (!layout) return;
-        // Drop any panel ids not present in `panels`; preserve focused if it survives.
-        const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+        // Restore panels + zOrder; drop ids that vanished from `panels`.
+        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
         state = {
           ...emptySnapshot(),
           panels: layout.panels,
           zOrder: surviving,
-          focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          dockSizes: layout.dockSizes ?? state.dockSizes,
+          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
         };
         emit();
       },

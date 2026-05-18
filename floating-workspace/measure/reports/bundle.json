@@ -1,50 +1,50 @@
 {
-  "measuredAt": "2026-05-18T07:31:37.951Z",
+  "measuredAt": "2026-05-18T08:24:35.020Z",
   "rows": [
     {
       "engine": "naked",
-      "minBytes": 4976,
-      "gzipBytes": 2177
+      "minBytes": 6561,
+      "gzipBytes": 2717
     },
     {
       "engine": "reatom",
-      "minBytes": 11208,
-      "gzipBytes": 4722
+      "minBytes": 12787,
+      "gzipBytes": 5298
     },
     {
       "engine": "triggery",
-      "minBytes": 18278,
-      "gzipBytes": 6564
+      "minBytes": 20073,
+      "gzipBytes": 7156
     },
     {
       "engine": "effector",
-      "minBytes": 18673,
-      "gzipBytes": 8365
+      "minBytes": 20426,
+      "gzipBytes": 8961
     },
     {
       "engine": "redux-thunk",
-      "minBytes": 27909,
-      "gzipBytes": 10678
+      "minBytes": 29713,
+      "gzipBytes": 11207
     },
     {
       "engine": "rtk-listener",
-      "minBytes": 31875,
-      "gzipBytes": 12154
+      "minBytes": 33679,
+      "gzipBytes": 12680
     },
     {
       "engine": "rxjs",
-      "minBytes": 32853,
-      "gzipBytes": 10563
+      "minBytes": 34628,
+      "gzipBytes": 11137
     },
     {
       "engine": "redux-saga",
-      "minBytes": 45095,
-      "gzipBytes": 16852
+      "minBytes": 46898,
+      "gzipBytes": 17387
     },
     {
       "engine": "xstate",
-      "minBytes": 46742,
-      "gzipBytes": 15562
+      "minBytes": 49174,
+      "gzipBytes": 16204
     }
   ]
 }

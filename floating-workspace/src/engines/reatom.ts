@@ -6,11 +6,11 @@ import { action, atom, createCtx } from '@reatom/core';
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
-  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
-  defaultTitle, emptySnapshot, genId, getViewport, persistLayout, readPersistedLayout, snapToEdges,
+  clampDockSize, clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
+  defaultTitle, emptySnapshot, genId, getViewport, panelInDock, persistLayout, readPersistedLayout, snapToEdges,
 } from '../scenario';
 import type {
-  FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
+  DockAnchor, FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
 function moveTop(z: readonly string[], id: string): string[] {
@@ -112,8 +112,45 @@ export const reatomFactory: EngineFactory = {
       },
       focus(id) {
         const cur = ctx.get(workspaceAtom);
-        if (!cur.panels[id]) return;
+        const panel = cur.panels[id];
+        if (!panel) return;
+        if (panel.dock !== null) {
+          mutate(ctx, (s) => ({ ...s, focused: id }));
+          return;
+        }
         mutate(ctx, (s) => ({ ...s, zOrder: moveTop(s.zOrder, id), focused: id }));
+        schedulePersist();
+      },
+      dock(id, anchor) {
+        mutate(ctx, (s) => {
+          const panel = s.panels[id];
+          if (!panel) return s;
+          const existing = panelInDock(s.panels, anchor);
+          let panels = s.panels;
+          let zOrder = s.zOrder;
+          if (existing && existing.id !== id) {
+            const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+            panels = { ...panels, [restored.id]: restored };
+            if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+          }
+          panels = { ...panels, [id]: { ...panel, dock: anchor } };
+          zOrder = zOrder.filter((x) => x !== id);
+          return { ...s, panels, zOrder, focused: id };
+        });
+        schedulePersist();
+      },
+      undock(id) {
+        mutate(ctx, (s) => {
+          const panel = s.panels[id];
+          if (!panel || panel.dock === null) return s;
+          const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+          return {
+            ...s,
+            panels: { ...s.panels, [id]: floating },
+            zOrder: s.zOrder.includes(id) ? s.zOrder : [...s.zOrder, id],
+            focused: id,
+          };
+        });
         schedulePersist();
       },
       setQuery(q) {
@@ -133,7 +170,7 @@ export const reatomFactory: EngineFactory = {
       startDrag(id, px, py) {
         const cur = ctx.get(workspaceAtom);
         const panel = cur.panels[id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return;
         mutate(ctx, (s) => ({
           ...s, zOrder: moveTop(s.zOrder, id), focused: id,
           interaction: { kind: 'drag', id, offset: { x: px - panel.x, y: py - panel.y } },
@@ -142,10 +179,20 @@ export const reatomFactory: EngineFactory = {
       startResize(id, px, py) {
         const cur = ctx.get(workspaceAtom);
         const panel = cur.panels[id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return;
         mutate(ctx, (s) => ({
           ...s, zOrder: moveTop(s.zOrder, id), focused: id,
           interaction: { kind: 'resize', id, startSize: { w: panel.w, h: panel.h }, startPointer: { x: px, y: py } },
+        }));
+      },
+      startDockResize(anchor, px, py) {
+        mutate(ctx, (s) => ({
+          ...s,
+          interaction: {
+            kind: 'dock-resize', anchor,
+            startSize: s.dockSizes[anchor],
+            startPointer: anchor === 'bottom' ? py : px,
+          },
         }));
       },
       pointerMove(px, py) {
@@ -157,9 +204,16 @@ export const reatomFactory: EngineFactory = {
         mutate(ctx, (s) => {
           const inter = s.interaction;
           if (!inter) return s;
+          const viewport = getViewport();
+          if (inter.kind === 'dock-resize') {
+            const cur = inter.anchor === 'bottom' ? py : px;
+            let delta = cur - inter.startPointer;
+            if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+            const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+            return { ...s, dockSizes: { ...s.dockSizes, [inter.anchor]: size } };
+          }
           const panel = s.panels[inter.id];
           if (!panel) return s;
-          const viewport = getViewport();
           if (inter.kind === 'drag') {
             const moved = { ...panel, x: px - inter.offset.x, y: py - inter.offset.y };
             const snapped = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
@@ -196,12 +250,13 @@ export const reatomFactory: EngineFactory = {
       loadLayout() {
         const layout = readPersistedLayout();
         if (!layout) return;
-        const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
         mutate(ctx, () => ({
           ...emptySnapshot(),
           panels: layout.panels,
           zOrder: surviving,
-          focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          dockSizes: layout.dockSizes ?? emptySnapshot().dockSizes,
+          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
         }));
       },
       reset() {

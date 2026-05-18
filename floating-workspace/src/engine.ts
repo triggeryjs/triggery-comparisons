@@ -7,6 +7,7 @@
 // Modal openers return typed promises so callers can `await` them.
 
 import type {
+  DockAnchor,
   ModalSpec,
   PanelKind,
   Unsubscribe,
@@ -34,11 +35,21 @@ export interface Engine {
   /** Update a floating panel's body (for note editing). */
   setBody(id: string, body: string): void;
 
+  // ─── dock / undock ─────────────────────────────────────────────────
+  /** Move a panel into a dock slot. If the slot is occupied, the previous
+   *  occupant goes back to floating with a sensible centered position. */
+  dock(id: string, anchor: DockAnchor): void;
+  /** Move a docked panel back into floating area. */
+  undock(id: string): void;
+
   // ─── pointer / keyboard ────────────────────────────────────────────
   /** Begin a drag interaction. UI calls on pointerdown on title bar. */
   startDrag(id: string, pointerX: number, pointerY: number): void;
   /** Begin a resize interaction. UI calls on pointerdown on resize handle. */
   startResize(id: string, pointerX: number, pointerY: number): void;
+  /** Begin a dock-divider resize. UI calls on pointerdown on the divider
+   *  between a docked panel and the main area. */
+  startDockResize(anchor: DockAnchor, pointerX: number, pointerY: number): void;
   /** Pointer moved (global) — engine applies throttled drag/resize updates. */
   pointerMove(pointerX: number, pointerY: number): void;
   /** Pointer released anywhere — engine ends drag/resize. */

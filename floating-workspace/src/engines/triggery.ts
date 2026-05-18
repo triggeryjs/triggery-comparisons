@@ -13,6 +13,7 @@ import {
   MAX_PANELS,
   PERSIST_DEBOUNCE_MS,
   POINTER_THROTTLE_MS,
+  clampDockSize,
   clampPanelToViewport,
   clampResize,
   clearPersistedLayout,
@@ -22,11 +23,13 @@ import {
   emptySnapshot,
   genId,
   getViewport,
+  panelInDock,
   persistLayout,
   readPersistedLayout,
   snapToEdges,
 } from '../scenario';
 import type {
+  DockAnchor,
   FloatingPanel,
   ModalSpec,
   PanelKind,
@@ -42,6 +45,8 @@ type LifecycleSchema = {
     'focus': { id: string };
     'set-query': { q: string };
     'set-body': { id: string; body: string };
+    'dock': { id: string; anchor: DockAnchor };
+    'undock': { id: string };
     'reset': void;
     'load-layout': void;
   };
@@ -51,11 +56,12 @@ type PointerSchema = {
   events: {
     'start-drag': { id: string; px: number; py: number };
     'start-resize': { id: string; px: number; py: number };
+    'start-dock-resize': { anchor: DockAnchor; px: number; py: number };
     'pointer-move': { px: number; py: number };
     'pointer-up': void;
   };
   actions: {
-    /** Debounced move emit — the actual pixel update goes through this. */
+    /** Throttled move emit — the actual pixel update goes through this. */
     'apply-move': { px: number; py: number };
     snapshot: WorkspaceSnapshot;
   };
@@ -137,7 +143,36 @@ export const triggeryFactory: EngineFactory = {
         }
       },
       'focus': (p: { id: string }) => {
-        if (state.panels[p.id]) moveTop(p.id);
+        const panel = state.panels[p.id];
+        if (!panel) return;
+        if (panel.dock !== null) state = { ...state, focused: p.id };
+        else moveTop(p.id);
+      },
+      'dock': (p: { id: string; anchor: DockAnchor }) => {
+        const panel = state.panels[p.id];
+        if (!panel) return;
+        const existing = panelInDock(state.panels, p.anchor);
+        let panels = state.panels;
+        let zOrder = state.zOrder;
+        if (existing && existing.id !== p.id) {
+          const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+          panels = { ...panels, [restored.id]: restored };
+          if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+        }
+        panels = { ...panels, [p.id]: { ...panel, dock: p.anchor } };
+        zOrder = zOrder.filter((x) => x !== p.id);
+        state = { ...state, panels, zOrder, focused: p.id };
+      },
+      'undock': (p: { id: string }) => {
+        const panel = state.panels[p.id];
+        if (!panel || panel.dock === null) return;
+        const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+        state = {
+          ...state,
+          panels: { ...state.panels, [p.id]: floating },
+          zOrder: state.zOrder.includes(p.id) ? state.zOrder : [...state.zOrder, p.id],
+          focused: p.id,
+        };
       },
       'set-query': (p: { q: string }) => {
         const top = state.modals[state.modals.length - 1];
@@ -158,18 +193,19 @@ export const triggeryFactory: EngineFactory = {
       'load-layout': () => {
         const layout = readPersistedLayout();
         if (!layout) return;
-        const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
         state = {
           ...emptySnapshot(),
           panels: layout.panels,
           zOrder: surviving,
-          focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          dockSizes: layout.dockSizes ?? state.dockSizes,
+          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
         };
       },
     };
     createTrigger<LifecycleSchema>({
       id: 'lifecycle',
-      events: ['open-panel', 'open-modal', 'close', 'focus', 'set-query', 'set-body', 'reset', 'load-layout'],
+      events: ['open-panel', 'open-modal', 'close', 'focus', 'set-query', 'set-body', 'dock', 'undock', 'reset', 'load-layout'],
       schedule: 'sync',
       handler: ({ event, actions }) => {
         lifecycleTable[event.name]?.(event.payload);
@@ -181,7 +217,7 @@ export const triggeryFactory: EngineFactory = {
     const pointerTable: Record<string, Fn> = {
       'start-drag': (p: { id: string; px: number; py: number }) => {
         const panel = state.panels[p.id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return;
         moveTop(p.id);
         state = {
           ...state,
@@ -190,7 +226,7 @@ export const triggeryFactory: EngineFactory = {
       },
       'start-resize': (p: { id: string; px: number; py: number }) => {
         const panel = state.panels[p.id];
-        if (!panel) return;
+        if (!panel || panel.dock !== null) return;
         moveTop(p.id);
         state = {
           ...state,
@@ -199,6 +235,17 @@ export const triggeryFactory: EngineFactory = {
             id: p.id,
             startSize: { w: panel.w, h: panel.h },
             startPointer: { x: p.px, y: p.py },
+          },
+        };
+      },
+      'start-dock-resize': (p: { anchor: DockAnchor; px: number; py: number }) => {
+        state = {
+          ...state,
+          interaction: {
+            kind: 'dock-resize',
+            anchor: p.anchor,
+            startSize: state.dockSizes[p.anchor],
+            startPointer: p.anchor === 'bottom' ? p.py : p.px,
           },
         };
       },
@@ -211,7 +258,7 @@ export const triggeryFactory: EngineFactory = {
     };
     createTrigger<PointerSchema>({
       id: 'pointer',
-      events: ['start-drag', 'start-resize', 'pointer-move', 'pointer-up'],
+      events: ['start-drag', 'start-resize', 'start-dock-resize', 'pointer-move', 'pointer-up'],
       schedule: 'sync',
       handler: ({ event, actions }) => {
         if (event.name === 'pointer-move') {
@@ -231,14 +278,23 @@ export const triggeryFactory: EngineFactory = {
       const { px, py } = raw as { px: number; py: number };
       const inter = state.interaction;
       if (!inter) return;
+      const viewport = getViewport();
+      if (inter.kind === 'dock-resize') {
+        const cur = inter.anchor === 'bottom' ? py : px;
+        let delta = cur - inter.startPointer;
+        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+        const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+        state = { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
+        emit();
+        return;
+      }
       const panel = state.panels[inter.id];
       if (!panel) return;
-      const viewport = getViewport();
       if (inter.kind === 'drag') {
         const moved = { ...panel, x: px - inter.offset.x, y: py - inter.offset.y };
         const clamped = clampPanelToViewport(moved, viewport);
         setPanel(snapToEdges(clamped, viewport));
-      } else {
+      } else if (inter.kind === 'resize') {
         const dx = px - inter.startPointer.x;
         const dy = py - inter.startPointer.y;
         const sized = clampResize(
@@ -344,8 +400,11 @@ export const triggeryFactory: EngineFactory = {
       focus: (id) => runtime.fire('focus', { id }),
       setQuery: (q) => runtime.fire('set-query', { q }),
       setBody: (id, body) => runtime.fire('set-body', { id, body }),
+      dock: (id, anchor) => runtime.fire('dock', { id, anchor }),
+      undock: (id) => runtime.fire('undock', { id }),
       startDrag: (id, px, py) => runtime.fire('start-drag', { id, px, py }),
       startResize: (id, px, py) => runtime.fire('start-resize', { id, px, py }),
+      startDockResize: (anchor, px, py) => runtime.fire('start-dock-resize', { anchor, px, py }),
       pointerMove: (px, py) => runtime.fire('pointer-move', { px, py }),
       pointerUp: () => runtime.fire('pointer-up'),
       onKey(e) {

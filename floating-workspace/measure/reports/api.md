@@ -3,7 +3,7 @@
 | engine       | imports | symbols | primitives | concepts list |
 |--------------|---:|---:|---:|---|
 | naked        |       0 |       0 |          0 |  |
-| effector     |       1 |       2 |         13 | createEvent×12, createStore×1 |
+| effector     |       1 |       2 |         16 | createEvent×15, createStore×1 |
 | triggery     |       1 |       2 |          5 | createTrigger×4, createRuntime×1 |
 | reatom       |       1 |       3 |          3 | atom×1, action×1, createCtx×1 |
 | redux-thunk  |       1 |       5 |          1 | createSlice×1 |

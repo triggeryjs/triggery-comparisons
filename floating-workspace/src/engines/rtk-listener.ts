@@ -9,11 +9,11 @@ import {
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
-  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
-  defaultTitle, emptySnapshot, genId, getViewport, persistLayout, readPersistedLayout, snapToEdges,
+  clampDockSize, clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
+  defaultTitle, emptySnapshot, genId, getViewport, panelInDock, persistLayout, readPersistedLayout, snapToEdges,
 } from '../scenario';
 import type {
-  FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
+  DockAnchor, FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
 function moveTop(z: readonly string[], id: string): string[] {
@@ -40,9 +40,41 @@ const slice = createSlice({
       }
     },
     focusPanel(s, a: PayloadAction<string>) {
-      if (!s.panels[a.payload]) return;
+      const panel = s.panels[a.payload];
+      if (!panel) return;
+      if (panel.dock !== null) { s.focused = a.payload; return; }
       s.zOrder = moveTop(s.zOrder, a.payload);
       s.focused = a.payload;
+    },
+    dockPanel(s, a: PayloadAction<{ id: string; anchor: DockAnchor }>) {
+      const panel = s.panels[a.payload.id];
+      if (!panel) return;
+      const existing = panelInDock(s.panels, a.payload.anchor);
+      if (existing && existing.id !== a.payload.id) {
+        existing.dock = null;
+        existing.x = 80; existing.y = 80;
+        if (!s.zOrder.includes(existing.id)) s.zOrder.push(existing.id);
+      }
+      panel.dock = a.payload.anchor;
+      s.zOrder = s.zOrder.filter((x) => x !== a.payload.id);
+      s.focused = a.payload.id;
+    },
+    undockPanel(s, a: PayloadAction<string>) {
+      const panel = s.panels[a.payload];
+      if (!panel || panel.dock === null) return;
+      panel.dock = null;
+      panel.x = panel.x || 96;
+      panel.y = panel.y || 96;
+      if (!s.zOrder.includes(a.payload)) s.zOrder.push(a.payload);
+      s.focused = a.payload;
+    },
+    setDockResizeInteraction(s, a: PayloadAction<{ anchor: DockAnchor; px: number; py: number }>) {
+      s.interaction = {
+        kind: 'dock-resize',
+        anchor: a.payload.anchor,
+        startSize: s.dockSizes[a.payload.anchor],
+        startPointer: a.payload.anchor === 'bottom' ? a.payload.py : a.payload.px,
+      };
     },
     setQuery(s, a: PayloadAction<string>) {
       const top = s.modals[s.modals.length - 1];
@@ -52,21 +84,28 @@ const slice = createSlice({
       const p = s.panels[a.payload.id]; if (p) p.body = a.payload.body;
     },
     startDrag(s, a: PayloadAction<{ id: string; px: number; py: number }>) {
-      const panel = s.panels[a.payload.id]; if (!panel) return;
+      const panel = s.panels[a.payload.id]; if (!panel || panel.dock !== null) return;
       s.zOrder = moveTop(s.zOrder, a.payload.id);
       s.focused = a.payload.id;
       s.interaction = { kind: 'drag', id: a.payload.id, offset: { x: a.payload.px - panel.x, y: a.payload.py - panel.y } };
     },
     startResize(s, a: PayloadAction<{ id: string; px: number; py: number }>) {
-      const panel = s.panels[a.payload.id]; if (!panel) return;
+      const panel = s.panels[a.payload.id]; if (!panel || panel.dock !== null) return;
       s.zOrder = moveTop(s.zOrder, a.payload.id);
       s.focused = a.payload.id;
       s.interaction = { kind: 'resize', id: a.payload.id, startSize: { w: panel.w, h: panel.h }, startPointer: { x: a.payload.px, y: a.payload.py } };
     },
     applyMove(s, a: PayloadAction<{ px: number; py: number }>) {
       const inter = s.interaction; if (!inter) return;
-      const panel = s.panels[inter.id]; if (!panel) return;
       const viewport = getViewport();
+      if (inter.kind === 'dock-resize') {
+        const cur = inter.anchor === 'bottom' ? a.payload.py : a.payload.px;
+        let delta = cur - inter.startPointer;
+        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+        s.dockSizes[inter.anchor] = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+        return;
+      }
+      const panel = s.panels[inter.id]; if (!panel) return;
       if (inter.kind === 'drag') {
         const moved = { ...panel, x: a.payload.px - inter.offset.x, y: a.payload.py - inter.offset.y };
         s.panels[inter.id] = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
@@ -181,8 +220,11 @@ export const rtkListenerFactory: EngineFactory = {
       focus: (id) => store.dispatch(slice.actions.focusPanel(id)),
       setQuery: (q) => store.dispatch(slice.actions.setQuery(q)),
       setBody: (id, body) => store.dispatch(slice.actions.setBody({ id, body })),
+      dock: (id, anchor) => store.dispatch(slice.actions.dockPanel({ id, anchor })),
+      undock: (id) => store.dispatch(slice.actions.undockPanel(id)),
       startDrag: (id, px, py) => store.dispatch(slice.actions.startDrag({ id, px, py })),
       startResize: (id, px, py) => store.dispatch(slice.actions.startResize({ id, px, py })),
+      startDockResize: (anchor, px, py) => store.dispatch(slice.actions.setDockResizeInteraction({ anchor, px, py })),
       pointerMove: (px, py) => store.dispatch(pointerMoveAction({ px, py })),
       pointerUp() {
         store.dispatch(slice.actions.endInteraction());
@@ -206,12 +248,13 @@ export const rtkListenerFactory: EngineFactory = {
       loadLayout() {
         const layout = readPersistedLayout();
         if (!layout) return;
-        const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
         store.dispatch(slice.actions.restoreLayout({
           ...emptySnapshot(),
           panels: layout.panels,
           zOrder: surviving,
-          focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          dockSizes: layout.dockSizes ?? emptySnapshot().dockSizes,
+          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
         }));
       },
       reset() {

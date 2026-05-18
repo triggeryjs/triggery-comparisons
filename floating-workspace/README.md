@@ -1,26 +1,26 @@
 # Floating workspace
 
-A real-prototype-grade window manager — drag panels, resize from the corner, ESC/⌘W/⌘K keyboard, modal stack with `alert` / `confirm` / command-palette returning typed promises, snap-to-edge, z-order, persisted layout. Same UI, **nine implementations**, one frozen 20-rule spec.
+A real-prototype-grade IDE-like window manager — **floating panels** (drag, resize, snap, z-order) **plus three dock slots** (left / right / bottom) with shared resize dividers, ESC/⌘W/⌘K keyboard, modal stack with `alert` / `confirm` / command-palette returning typed promises, persisted layout. Same UI, **nine implementations**, one frozen 28-rule spec.
 
-This is the deliberately-hardest scenario in the repo. Pointer-move events at 60 fps are a stream; window state is a record; keyboard routing is event dispatch; promise-returning modals are async glue. Each library is good at one or two of those four and pays for the others. The leaderboard reshuffles accordingly — read on for an honest spread.
+This is the deliberately-hardest scenario in the repo. Pointer-move events at 60 fps are a stream; window state is a record with two regions (floating panels + 3 dock slots); keyboard routing is event dispatch; promise-returning modals are async glue. Each library is good at one or two of those four and pays for the others. The leaderboard reshuffles accordingly — read on for an honest spread.
 
 ## Headline numbers
 
 |                                  | best                              | worst                            | triggery |
 |---|---|---|---|
-| **LOC**                          | redux-thunk — 206                 | xstate — 352                     | 8th (332) |
-| **Bundle (gzipped)**             | reatom — 4.61 KB                  | redux-saga — 16.46 KB            | **2nd** (6.41 KB) |
-| **API surface (imports)**        | **triggery — 1 / 2 symbols**      | rxjs — 2 / 18 symbols            | **1st** |
+| **LOC**                          | redux-thunk — 253                 | xstate — 424                     | 8th (391) |
+| **Bundle (gzipped)**             | reatom — 5.17 KB                  | redux-saga — 16.98 KB            | **3rd** (6.99 KB) |
+| **API surface (imports)**        | **triggery — 1 / 2 symbols**      | rxjs — 2 / 13 symbols            | **1st** |
 | **Dependency footprint**         | **triggery — 1 package** *(tied)* | redux-saga — 12 packages         | **tied 1st** |
-| **Drag throughput (events/sec)** | redux-thunk — 7.6M / RxJS — 1.65M *(throttle-honoring)* | RTK — 71k                       | 7th (339k) |
-| **setBody latency p50**          | RxJS — 1.0 µs                     | RTK — 6.5 µs                     | 4th (2.5 µs) |
-| **Cyclomatic complexity**        | rtk / saga — 37                   | xstate — 52                      | 7th (48) |
+| **Drag throughput (events/sec)** | redux-thunk — 7.8M *(throttle-honoring)* | RTK — 75k                       | 6th (231k) |
+| **setBody latency p50**          | naked — 0.67 µs                   | RTK — 6.7 µs                     | 4th (2.5 µs) |
+| **Cyclomatic complexity**        | rtk / saga — 57                   | xstate — 74                      | 7th (68) |
 
 Three things to read off this honest table:
 
-1. **Triggery doesn't win LOC here.** A simple slice + reducer (RTK-style) is the shortest way to express "20 rules over a record state" — `redux-thunk` ships at 206 LOC and `reatom` at 211. Triggery's 4-trigger split (lifecycle / pointer / keyboard / persist) is more code on this scenario than reactive engines need. It's the right shape for the **vocabulary** (`actions.throttle(16)` is a one-liner), but the 4 trigger setups eat the savings on this 20-rule app.
-2. **Bundle, API surface, and dependency footprint are still Triggery's home turf.** 6.41 KB gz (half of effector/rxjs/redux-thunk, a third of saga), one import / two symbols, one npm package. The Redux family ships 5 packages just to start; saga ships 12.
-3. **Throughput numbers tell two stories at once.** The naïve `events/sec` column makes Redux + thunk look fastest (7.6M ev/sec) — but that engine is *not* applying every event: its hand-rolled `lastMoveTime` throttle drops 997 of 1000 incoming `pointerMove`s and only fires 3 snapshot updates. RxJS does the same with `throttleTime(16)`. Triggery and naked also throttle to 3 snapshots out of 1000 events. **XState is the outlier — it produces 1002 snapshots from 1000 events** because its idiomatic `cancel + raise + delay` pattern is *debounce-shaped, not throttle-shaped*. We call that out honestly below.
+1. **Triggery doesn't win LOC here.** A simple slice + reducer (RTK-style) is the shortest way to express "28 rules over a record state with one big mutator" — `redux-thunk` ships at 253 LOC, `rtk-listener` at 259, `redux-saga` at 264, `reatom` at 266. Triggery's 4-trigger split (lifecycle / pointer / keyboard / persist) is structural overhead this scenario doesn't amortise. It's the right shape for the **vocabulary** (`actions.throttle(16)` is a one-liner), but the four trigger setups + four dispatch tables eat the savings.
+2. **Bundle, API surface, and dependency footprint are still Triggery's home turf.** 6.99 KB gz (still beats effector / rxjs / redux family on weight), one import / two symbols / one npm package. The Redux family ships 5 packages just to start; saga ships 12.
+3. **Throughput numbers tell two stories at once.** The naïve `events/sec` column makes Redux + thunk look fastest (7.8M ev/sec) — but that engine is *not* applying every event: its hand-rolled `lastMoveTime` throttle drops 997 of 1000 incoming `pointerMove`s and only fires 3 snapshot updates. RxJS does the same with `throttleTime(16)`. Triggery and naked also throttle to 3 snapshots out of 1000 events. **XState is the outlier — it produces 1002 snapshots from 1000 events** because its idiomatic `cancel + raise + delay` pattern is *debounce-shaped, not throttle-shaped*. We call that out honestly below.
 
 ## The 9 engines
 
@@ -36,13 +36,13 @@ Three things to read off this honest table:
 
 ## Acceptance behaviour (the spec — frozen)
 
-20 rules over 6 concerns. Every engine satisfies them identically.
+28 rules over 8 concerns. Every engine satisfies them identically.
 
 ### Lifecycle
 
 - **R1.** `openPanel(kind)` adds a floating window with a unique id and seeded position.
-- **R2.** `close(id)` removes any window. For modal openers (alert/confirm/palette) the awaiting promise resolves with the result.
-- **R3.** Max **5 floating panels** (modals don't count). Subsequent `openPanel` returns `null`.
+- **R2.** `close(id)` removes any window (floating or docked). For modal openers the awaiting promise resolves with the result.
+- **R3.** Max **5 panels total** (floating + docked combined). Subsequent `openPanel` returns `null`.
 - **R4.** Modals stack — a second `open` adds to the top; ESC closes the top one.
 
 ### Drag (floating panels only)
@@ -52,6 +52,7 @@ Three things to read off this honest table:
 - **R7.** Pointerup → end drag, flush persist.
 - **R8.** Clamp to viewport: the window cannot be dragged off-screen.
 - **R9.** Snap to edge when within 12 px (top/left/right/bottom).
+- **R29.** Docked panels do NOT drag from their title bar (only undock or close).
 
 ### Resize (floating panels)
 
@@ -66,15 +67,29 @@ Three things to read off this honest table:
 
 ### Keyboard
 
-- **R15.** **ESC** → close top modal; otherwise close focused floating panel.
-- **R16.** **⌘K / Ctrl+K** → open command palette.
-- **R17.** **⌘W / Ctrl+W** → close focused floating panel (only when no modal is open).
+- **R15.** **ESC** → close top modal; otherwise close focused panel.
+- **R16.** **⌘K / Ctrl+K** → open command palette. Picking a command dispatches it through the engine façade.
+- **R17.** **⌘W / Ctrl+W** → close focused panel (only when no modal is open).
 
 ### Persistence
 
-- **R18.** Any floating-layout change schedules a **debounced 1000 ms** localStorage write.
-- **R19.** On mount → restore the saved layout.
+- **R18.** Any layout change schedules a **debounced 1000 ms** localStorage write.
+- **R19.** On mount → restore saved layout (panels + dock slots + dock sizes).
 - **R20.** `reset()` clears state + localStorage.
+
+### Docking (Notion/VS Code-style)
+
+- **R21.** `dock(id, anchor)` moves a panel into one of three dock slots: `left` / `right` / `bottom`. The panel keeps its body but loses x/y; layout-wise it takes the whole slot.
+- **R22.** `undock(id)` returns a docked panel to floating with a sensible position.
+- **R23.** Only **one panel per dock slot**. Docking into an occupied slot kicks the existing one back to floating (lossless body, fresh position).
+- **R24.** Each occupied dock has a **shared resize divider** between itself and the main area. Pointerdown on the divider starts a `dock-resize` interaction.
+- **R25.** Dock-resize moves are throttled to 16 ms like drag. Dock size is clamped to `[160 px, 60 % of viewport]`.
+- **R26.** Three dock slots can be active simultaneously (left, right, bottom). Layout is CSS Grid; resizing a dock shrinks the main area accordingly.
+
+### Command palette
+
+- **R27.** Palette commands include: open note / open inspector / dock focused (left/right/bottom) / undock focused / close focused / reset workspace.
+- **R28.** Palette resolves to a command id; the UI maps it to an engine call.
 
 ## How to play with it
 
@@ -109,29 +124,29 @@ LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
 | engine | LOC | bytes |
 |---|---:|---:|
-| redux-thunk  |  206 |  9308 |
-| reatom       |  211 |  8903 |
-| rtk-listener |  212 |  9486 |
-| effector     |  217 |  9773 |
-| redux-saga   |  217 |  9674 |
-| rxjs         |  257 | 11341 |
-| naked        |  271 |  9238 |
-| **triggery** | **332** | **13227** |
-| xstate       |  352 | 15215 |
+| redux-thunk  |  253 | 11591 |
+| rtk-listener |  259 | 11865 |
+| redux-saga   |  264 | 11957 |
+| reatom       |  266 | 11190 |
+| effector     |  270 | 12258 |
+| rxjs         |  309 | 13788 |
+| naked        |  330 | 12035 |
+| **triggery** | **391** | **15944** |
+| xstate       |  424 | 18739 |
 
 Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised, `production` export condition:
 
 | engine | minified | gzipped |
 |---|---:|---:|
-| naked        |   4.86 KB |   2.13 KB |
-| reatom       |  10.95 KB |   4.61 KB |
-| **triggery** |  **17.85 KB** |   **6.41 KB** |
-| effector     |  18.24 KB |   8.17 KB |
-| redux-thunk  |  27.25 KB |  10.43 KB |
-| rtk-listener |  31.13 KB |  11.87 KB |
-| rxjs         |  32.08 KB |  10.32 KB |
-| redux-saga   |  44.04 KB |  16.46 KB |
-| xstate       |  45.65 KB |  15.20 KB |
+| naked        |   6.41 KB |   2.65 KB |
+| reatom       |  12.49 KB |   5.17 KB |
+| **triggery** |  **19.60 KB** |   **6.99 KB** |
+| effector     |  19.95 KB |   8.75 KB |
+| redux-thunk  |  29.02 KB |  10.94 KB |
+| rtk-listener |  32.89 KB |  12.38 KB |
+| rxjs         |  33.82 KB |  10.88 KB |
+| redux-saga   |  45.80 KB |  16.98 KB |
+| xstate       |  48.02 KB |  15.82 KB |
 
 ### Performance
 
@@ -142,15 +157,15 @@ Two shapes per engine, single canonical run on M1 Pro / Node 20:
 
 | engine                 | drag events/sec | snapshots/1000 | setBody p50 | p95 | p99 |
 |---|---:|---:|---:|---:|---:|
-| Naked baseline         |  11407k ev/sec |       3 |  0.63 µs |  0.71 µs |   2.3 µs |
-| Redux + thunk          |   7621k ev/sec |       3 |   4.2 µs |    13 µs |    33 µs |
-| Effector               |   6861k ev/sec |       3 |   3.1 µs |   6.2 µs |    18 µs |
-| Reatom                 |   4854k ev/sec |       3 |   2.4 µs |   3.5 µs |   9.8 µs |
-| RxJS                   |   1651k ev/sec |       3 |   1.0 µs |   1.4 µs |   5.7 µs |
-| Redux + saga           |    722k ev/sec |       3 |   3.4 µs |    12 µs |    31 µs |
-| **Triggery**           |    **339k ev/sec** |    **3** |   **2.5 µs** |   **3.5 µs** |   **9.3 µs** |
-| **XState**             |   **100k ev/sec** | **1002** |   **4.4 µs** |   **6.9 µs** |    **21 µs** |
-| RTK listenerMiddleware |     71k ev/sec |       2 |   6.5 µs |    11 µs |    23 µs |
+| Redux + thunk          |   7813k ev/sec |       3 |   4.5 µs |   5.7 µs |    16 µs |
+| Reatom                 |   4296k ev/sec |       3 |   2.5 µs |   3.9 µs |   9.4 µs |
+| Effector               |   3502k ev/sec |       3 |   4.6 µs |   9.1 µs |    16 µs |
+| Naked baseline         |   2814k ev/sec |       3 |  0.67 µs |  0.75 µs |   2.2 µs |
+| RxJS                   |   1815k ev/sec |       3 |   1.1 µs |   1.9 µs |   5.4 µs |
+| **Triggery**           |    **231k ev/sec** |    **3** |   **2.5 µs** |   **4.6 µs** |    **12 µs** |
+| Redux + saga           |    217k ev/sec |       3 |   4.4 µs |    26 µs |    46 µs |
+| **XState**             |     **87k ev/sec** | **1002** |   **4.7 µs** |    **19 µs** |    **57 µs** |
+| RTK listenerMiddleware |     75k ev/sec |       2 |   6.7 µs |    10 µs |    31 µs |
 
 **Read with care.** The naïve `events/sec` ranking is misleading because most engines drop almost every event (that's the whole point of throttling). What you actually want to know:
 
@@ -165,28 +180,28 @@ Two shapes per engine, single canonical run on M1 Pro / Node 20:
 | naked        | 0 | 0 | (pure JS) |
 | **triggery** | **1** | **2** | **`createTrigger`×4, `createRuntime`×1** |
 | reatom       | 1 | 3 | `atom`×1, `action`×1, `createCtx`×1 |
-| effector     | 1 | 2 | `createEvent`×11, `createStore`×1 |
-| redux-thunk  | 1 | 3 | `createSlice`×1 |
-| rtk-listener | 1 | 5 | `createAction`×2, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×2 |
+| effector     | 1 | 2 | `createEvent`×15, `createStore`×1 |
+| redux-thunk  | 1 | 5 | `createSlice`×1 |
+| rtk-listener | 1 | 5 | `createAction`×1, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×2 |
 | xstate       | 1 | 6 | `setup`, `createMachine`, `createActor`, `assign`, `cancel`, `raise` |
-| redux-saga   | 3 | 9 | `createAction`×3, `createSlice`×1 + saga effects (`all`, `call`, `debounce`, `put`, `select`, `takeEvery`, `throttle`) |
-| rxjs         | 2 | 9 | `Subject`, `BehaviorSubject` + 7 operators (`scan`, `throttleTime`, `debounceTime`, `filter`, `merge`, `tap`, `share`, …) |
+| redux-saga   | 3 | 12 | `createAction`×1, `createSlice`×1 + saga effects (`all`, `call`, `debounce`, `put`, `select`, `takeEvery`, `throttle`) |
+| rxjs         | 2 | 13 | `Subject`, `BehaviorSubject` + 7 operators (`scan`, `throttleTime`, `debounceTime`, `filter`, `merge`, `tap`, `share`, …) |
 
 ### Complexity & type safety
 
 | engine | cyclomatic | max nesting | `as` casts | `!` non-null |
 |---|---:|---:|---:|---:|
-| rtk-listener |    37 |       6 |  4 |  0 |
-| redux-saga   |    37 |       6 |  5 |  0 |
-| effector     |    42 |       7 |  1 |  0 |
-| redux-thunk  |    42 |       6 |  3 |  0 |
-| reatom       |    43 |       8 |  1 |  0 |
-| naked        |    44 |       7 |  1 |  0 |
-| **triggery** |    **48** |       **7** |  **3** |  **0** |
-| rxjs         |    51 |       7 |  1 |  0 |
-| xstate       |    52 |       8 |  4 |  0 |
+| rtk-listener |    57 |       6 |  5 |  0 |
+| redux-saga   |    57 |       6 |  6 |  0 |
+| effector     |    61 |       7 |  1 |  0 |
+| reatom       |    62 |       8 |  1 |  0 |
+| redux-thunk  |    62 |       6 |  4 |  0 |
+| naked        |    64 |       7 |  1 |  0 |
+| **triggery** |    **68** |       **7** |  **3** |  **0** |
+| rxjs         |    73 |       7 |  1 |  0 |
+| xstate       |    74 |       8 |  4 |  0 |
 
-Triggery 48 (7th of 9). The 4-trigger split + 4 dispatch tables + 4 inline handlers concentrate branching across triggers. RTK / saga are lowest because their reducers compose by name (no `if (event.name === …)` chain). The cyclomatic counter favours "many small functions referenced from a slice" over "few large dispatch tables".
+Triggery 68 (7th of 9). The 4-trigger split + 4 dispatch tables + dock interaction discriminator concentrate branching. RTK / saga are lowest because their slice reducers compose by name (no `if (event.name === …)` chain). The cyclomatic counter favours "many small functions referenced from a slice" over "few large dispatch tables".
 
 ### Dependency footprint
 

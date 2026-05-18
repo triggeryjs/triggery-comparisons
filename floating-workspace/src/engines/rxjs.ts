@@ -12,11 +12,11 @@ import {
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
-  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
-  defaultTitle, emptySnapshot, genId, getViewport, persistLayout, readPersistedLayout, snapToEdges,
+  clampDockSize, clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
+  defaultTitle, emptySnapshot, genId, getViewport, panelInDock, persistLayout, readPersistedLayout, snapToEdges,
 } from '../scenario';
 import type {
-  FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
+  DockAnchor, FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
 type Action =
@@ -26,8 +26,11 @@ type Action =
   | { type: 'focus'; id: string }
   | { type: 'set-query'; q: string }
   | { type: 'set-body'; id: string; body: string }
+  | { type: 'dock'; id: string; anchor: DockAnchor }
+  | { type: 'undock'; id: string }
   | { type: 'start-drag'; id: string; px: number; py: number }
   | { type: 'start-resize'; id: string; px: number; py: number }
+  | { type: 'start-dock-resize'; anchor: DockAnchor; px: number; py: number }
   | { type: 'pointer-move'; px: number; py: number }
   | { type: 'pointer-up' }
   | { type: 'reset' }
@@ -73,9 +76,47 @@ function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, 
       }
       return state;
     }
-    case 'focus':
-      if (!state.panels[a.id]) return state;
+    case 'focus': {
+      const panel = state.panels[a.id];
+      if (!panel) return state;
+      if (panel.dock !== null) return { ...state, focused: a.id };
       return { ...state, zOrder: moveTop(state.zOrder, a.id), focused: a.id };
+    }
+    case 'dock': {
+      const panel = state.panels[a.id];
+      if (!panel) return state;
+      const existing = panelInDock(state.panels, a.anchor);
+      let panels = state.panels;
+      let zOrder = state.zOrder;
+      if (existing && existing.id !== a.id) {
+        const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+        panels = { ...panels, [restored.id]: restored };
+        if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+      }
+      panels = { ...panels, [a.id]: { ...panel, dock: a.anchor } };
+      zOrder = zOrder.filter((x) => x !== a.id);
+      return { ...state, panels, zOrder, focused: a.id };
+    }
+    case 'undock': {
+      const panel = state.panels[a.id];
+      if (!panel || panel.dock === null) return state;
+      const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+      return {
+        ...state,
+        panels: { ...state.panels, [a.id]: floating },
+        zOrder: state.zOrder.includes(a.id) ? state.zOrder : [...state.zOrder, a.id],
+        focused: a.id,
+      };
+    }
+    case 'start-dock-resize':
+      return {
+        ...state,
+        interaction: {
+          kind: 'dock-resize', anchor: a.anchor,
+          startSize: state.dockSizes[a.anchor],
+          startPointer: a.anchor === 'bottom' ? a.py : a.px,
+        },
+      };
     case 'set-query': {
       const top = state.modals[state.modals.length - 1];
       if (top?.kind !== 'command-palette') return state;
@@ -88,7 +129,7 @@ function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, 
     }
     case 'start-drag': {
       const panel = state.panels[a.id];
-      if (!panel) return state;
+      if (!panel || panel.dock !== null) return state;
       return {
         ...state,
         zOrder: moveTop(state.zOrder, a.id),
@@ -98,7 +139,7 @@ function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, 
     }
     case 'start-resize': {
       const panel = state.panels[a.id];
-      if (!panel) return state;
+      if (!panel || panel.dock !== null) return state;
       return {
         ...state,
         zOrder: moveTop(state.zOrder, a.id),
@@ -113,9 +154,16 @@ function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, 
     case 'pointer-move': {
       const inter = state.interaction;
       if (!inter) return state;
+      const viewport = getViewport();
+      if (inter.kind === 'dock-resize') {
+        const cur = inter.anchor === 'bottom' ? a.py : a.px;
+        let delta = cur - inter.startPointer;
+        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+        const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+        return { ...state, dockSizes: { ...state.dockSizes, [inter.anchor]: size } };
+      }
       const panel = state.panels[inter.id];
       if (!panel) return state;
-      const viewport = getViewport();
       if (inter.kind === 'drag') {
         const moved = { ...panel, x: a.px - inter.offset.x, y: a.py - inter.offset.y };
         const snapped = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
@@ -136,12 +184,13 @@ function reduce(state: WorkspaceSnapshot, a: Action, openResolvers: Map<number, 
     case 'load-layout': {
       const layout = readPersistedLayout();
       if (!layout) return state;
-      const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+      const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
       return {
         ...emptySnapshot(),
         panels: layout.panels,
         zOrder: surviving,
-        focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+        dockSizes: layout.dockSizes ?? emptySnapshot().dockSizes,
+        focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
       };
     }
   }
@@ -242,8 +291,11 @@ export const rxjsFactory: EngineFactory = {
       focus: (id) => actions$.next({ type: 'focus', id }),
       setQuery: (q) => actions$.next({ type: 'set-query', q }),
       setBody: (id, body) => actions$.next({ type: 'set-body', id, body }),
+      dock: (id, anchor) => actions$.next({ type: 'dock', id, anchor }),
+      undock: (id) => actions$.next({ type: 'undock', id }),
       startDrag: (id, px, py) => actions$.next({ type: 'start-drag', id, px, py }),
       startResize: (id, px, py) => actions$.next({ type: 'start-resize', id, px, py }),
+      startDockResize: (anchor, px, py) => actions$.next({ type: 'start-dock-resize', anchor, px, py }),
       pointerMove: (px, py) => actions$.next({ type: 'pointer-move', px, py }),
       pointerUp: () => actions$.next({ type: 'pointer-up' }),
       onKey({ key, meta, ctrl }) {

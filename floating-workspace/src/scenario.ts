@@ -3,12 +3,13 @@
 // engine files so they focus on orchestration.
 
 import type {
+  DockAnchor,
   FloatingPanel,
   PanelKind,
   WorkspaceSnapshot,
 } from './types';
 
-export const STORAGE_KEY = 'triggery-comparison.floating-workspace.v2';
+export const STORAGE_KEY = 'triggery-comparison.floating-workspace.v3';
 
 /** Drag/resize pointer updates are throttled to ~60 fps (16 ms). */
 export const POINTER_THROTTLE_MS = 16;
@@ -20,25 +21,49 @@ export const MAX_PANELS = 5;
 export const SNAP_PX = 12;
 /** Floating-panel size constraints. */
 export const MIN_PANEL = { w: 200, h: 120 };
+/** Default + clamp range for dock sizes (width for left/right, height for bottom). */
+export const DOCK_DEFAULT = { left: 280, right: 280, bottom: 220 } as const;
+export const DOCK_MIN = 160;
+/** Maximum dock size as ratio of viewport perpendicular dimension. */
+export const DOCK_MAX_RATIO = 0.6;
 
 /** Default seed positions — staggered so freshly opened panels don't overlap. */
 let openCounter = 0;
-export function defaultPanelLayout(kind: PanelKind): Pick<FloatingPanel, 'x' | 'y' | 'w' | 'h'> {
+export function defaultPanelLayout(kind: PanelKind): Pick<FloatingPanel, 'x' | 'y' | 'w' | 'h' | 'dock'> {
   openCounter += 1;
   const dx = (openCounter % 6) * 28;
   const dy = (openCounter % 6) * 28;
-  return kind === 'note'
-    ? { x: 96 + dx, y: 96 + dy, w: 320, h: 220 }
-    : { x: 540 + dx, y: 96 + dy, w: 280, h: 280 };
+  return {
+    dock: null,
+    ...(kind === 'note'
+      ? { x: 96 + dx, y: 96 + dy, w: 320, h: 220 }
+      : { x: 540 + dx, y: 96 + dy, w: 280, h: 280 }),
+  };
+}
+
+/** Find which panel currently occupies the given dock slot (if any). */
+export function panelInDock(
+  panels: Readonly<Record<string, FloatingPanel>>,
+  anchor: DockAnchor,
+): FloatingPanel | undefined {
+  for (const p of Object.values(panels)) if (p.dock === anchor) return p;
+  return undefined;
+}
+
+/** Clamp a dock's size to its allowed range, given the workspace viewport. */
+export function clampDockSize(anchor: DockAnchor, size: number, viewport: { w: number; h: number }): number {
+  const max = (anchor === 'bottom' ? viewport.h : viewport.w) * DOCK_MAX_RATIO;
+  return Math.max(DOCK_MIN, Math.min(size, max));
 }
 
 export const COMMAND_PALETTE_COMMANDS = [
   { id: 'open:note', label: 'Open new note', hint: '⌘N-like' },
   { id: 'open:inspector', label: 'Open inspector', hint: '' },
+  { id: 'dock:focused:left', label: 'Dock focused: left', hint: '' },
+  { id: 'dock:focused:right', label: 'Dock focused: right', hint: '' },
+  { id: 'dock:focused:bottom', label: 'Dock focused: bottom', hint: '' },
+  { id: 'undock:focused', label: 'Undock focused → floating', hint: '' },
   { id: 'close:focused', label: 'Close focused window', hint: '⌘W' },
-  { id: 'arrange:cascade', label: 'Arrange windows: cascade', hint: '' },
-  { id: 'arrange:tile-horizontal', label: 'Arrange windows: tile horizontal', hint: '' },
-  { id: 'arrange:tile-vertical', label: 'Arrange windows: tile vertical', hint: '' },
   { id: 'workspace:reset', label: 'Reset workspace', hint: 'destructive' },
 ];
 
@@ -122,6 +147,7 @@ export function emptySnapshot(): WorkspaceSnapshot {
     modals: [],
     focused: null,
     interaction: null,
+    dockSizes: { left: DOCK_DEFAULT.left, right: DOCK_DEFAULT.right, bottom: DOCK_DEFAULT.bottom },
   };
 }
 
@@ -129,6 +155,7 @@ export type PersistedLayout = {
   panels: Record<string, FloatingPanel>;
   zOrder: string[];
   focused: string | null;
+  dockSizes: { left: number; right: number; bottom: number };
 };
 
 export function persistLayout(s: WorkspaceSnapshot): void {
@@ -137,6 +164,7 @@ export function persistLayout(s: WorkspaceSnapshot): void {
       panels: s.panels,
       zOrder: [...s.zOrder],
       focused: s.focused,
+      dockSizes: s.dockSizes,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(layout));
   } catch {

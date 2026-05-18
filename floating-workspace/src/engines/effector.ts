@@ -6,11 +6,11 @@ import { createEvent, createStore } from 'effector';
 import type { Engine, EngineFactory } from '../engine';
 import {
   COMMAND_PALETTE_COMMANDS, MAX_PANELS, PERSIST_DEBOUNCE_MS, POINTER_THROTTLE_MS,
-  clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
-  defaultTitle, emptySnapshot, genId, getViewport, persistLayout, readPersistedLayout, snapToEdges,
+  clampDockSize, clampPanelToViewport, clampResize, clearPersistedLayout, defaultBody, defaultPanelLayout,
+  defaultTitle, emptySnapshot, genId, getViewport, panelInDock, persistLayout, readPersistedLayout, snapToEdges,
 } from '../scenario';
 import type {
-  FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
+  DockAnchor, FloatingPanel, ModalSpec, PanelKind, Unsubscribe, WorkspaceSnapshot,
 } from '../types';
 
 function moveTop(z: readonly string[], id: string): string[] {
@@ -38,6 +38,9 @@ export const effectorFactory: EngineFactory = {
     const setBodyEv = createEvent<{ id: string; body: string }>();
     const startDragEv = createEvent<{ id: string; px: number; py: number }>();
     const startResizeEv = createEvent<{ id: string; px: number; py: number }>();
+    const startDockResizeEv = createEvent<{ anchor: DockAnchor; px: number; py: number }>();
+    const dockEv = createEvent<{ id: string; anchor: DockAnchor }>();
+    const undockEv = createEvent<{ id: string }>();
     const applyMoveEv = createEvent<{ px: number; py: number }>();
     const pointerUpEv = createEvent();
     const resetEv = createEvent();
@@ -76,7 +79,12 @@ export const effectorFactory: EngineFactory = {
         }
         return s;
       })
-      .on(focusPanel, (s, p) => s.panels[p.id] ? { ...s, zOrder: moveTop(s.zOrder, p.id), focused: p.id } : s)
+      .on(focusPanel, (s, p) => {
+        const panel = s.panels[p.id];
+        if (!panel) return s;
+        if (panel.dock !== null) return { ...s, focused: p.id };
+        return { ...s, zOrder: moveTop(s.zOrder, p.id), focused: p.id };
+      })
       .on(setQueryEv, (s, p) => {
         const top = s.modals[s.modals.length - 1];
         if (top?.kind !== 'command-palette') return s;
@@ -89,7 +97,7 @@ export const effectorFactory: EngineFactory = {
       })
       .on(startDragEv, (s, p) => {
         const panel = s.panels[p.id];
-        if (!panel) return s;
+        if (!panel || panel.dock !== null) return s;
         return {
           ...s, zOrder: moveTop(s.zOrder, p.id), focused: p.id,
           interaction: { kind: 'drag', id: p.id, offset: { x: p.px - panel.x, y: p.py - panel.y } },
@@ -97,7 +105,7 @@ export const effectorFactory: EngineFactory = {
       })
       .on(startResizeEv, (s, p) => {
         const panel = s.panels[p.id];
-        if (!panel) return s;
+        if (!panel || panel.dock !== null) return s;
         return {
           ...s, zOrder: moveTop(s.zOrder, p.id), focused: p.id,
           interaction: { kind: 'resize', id: p.id, startSize: { w: panel.w, h: panel.h }, startPointer: { x: p.px, y: p.py } },
@@ -106,9 +114,16 @@ export const effectorFactory: EngineFactory = {
       .on(applyMoveEv, (s, p) => {
         const inter = s.interaction;
         if (!inter) return s;
+        const viewport = getViewport();
+        if (inter.kind === 'dock-resize') {
+          const cur = inter.anchor === 'bottom' ? p.py : p.px;
+          let delta = cur - inter.startPointer;
+          if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+          const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+          return { ...s, dockSizes: { ...s.dockSizes, [inter.anchor]: size } };
+        }
         const panel = s.panels[inter.id];
         if (!panel) return s;
-        const viewport = getViewport();
         if (inter.kind === 'drag') {
           const moved = { ...panel, x: p.px - inter.offset.x, y: p.py - inter.offset.y };
           const snapped = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
@@ -119,17 +134,52 @@ export const effectorFactory: EngineFactory = {
         const sized = clampResize(inter.startSize.w + dx, inter.startSize.h + dy, { x: panel.x, y: panel.y }, viewport);
         return { ...s, panels: { ...s.panels, [inter.id]: { ...panel, ...sized } } };
       })
+      .on(startDockResizeEv, (s, p) => ({
+        ...s,
+        interaction: {
+          kind: 'dock-resize', anchor: p.anchor,
+          startSize: s.dockSizes[p.anchor],
+          startPointer: p.anchor === 'bottom' ? p.py : p.px,
+        },
+      }))
+      .on(dockEv, (s, p) => {
+        const panel = s.panels[p.id];
+        if (!panel) return s;
+        const existing = panelInDock(s.panels, p.anchor);
+        let panels = s.panels;
+        let zOrder = s.zOrder;
+        if (existing && existing.id !== p.id) {
+          const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+          panels = { ...panels, [restored.id]: restored };
+          if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+        }
+        panels = { ...panels, [p.id]: { ...panel, dock: p.anchor } };
+        zOrder = zOrder.filter((x) => x !== p.id);
+        return { ...s, panels, zOrder, focused: p.id };
+      })
+      .on(undockEv, (s, p) => {
+        const panel = s.panels[p.id];
+        if (!panel || panel.dock === null) return s;
+        const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+        return {
+          ...s,
+          panels: { ...s.panels, [p.id]: floating },
+          zOrder: s.zOrder.includes(p.id) ? s.zOrder : [...s.zOrder, p.id],
+          focused: p.id,
+        };
+      })
       .on(pointerUpEv, (s) => ({ ...s, interaction: null }))
       .on(resetEv, () => emptySnapshot())
       .on(loadLayoutEv, (s) => {
         const layout = readPersistedLayout();
         if (!layout) return s;
-        const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+        const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
         return {
           ...emptySnapshot(),
           panels: layout.panels,
           zOrder: surviving,
-          focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
+          dockSizes: layout.dockSizes ?? emptySnapshot().dockSizes,
+          focused: layout.panels[layout.focused ?? ''] ? layout.focused : (surviving[surviving.length - 1] ?? null),
         };
       });
 
@@ -191,8 +241,11 @@ export const effectorFactory: EngineFactory = {
       focus: (id) => focusPanel({ id }),
       setQuery: (q) => setQueryEv({ q }),
       setBody: (id, body) => setBodyEv({ id, body }),
+      dock: (id, anchor) => dockEv({ id, anchor }),
+      undock: (id) => undockEv({ id }),
       startDrag: (id, px, py) => startDragEv({ id, px, py }),
       startResize: (id, px, py) => startResizeEv({ id, px, py }),
+      startDockResize: (anchor, px, py) => startDockResizeEv({ anchor, px, py }),
       pointerMove(px, py) {
         const now = performance.now();
         if (now - lastMoveTime < POINTER_THROTTLE_MS) return;

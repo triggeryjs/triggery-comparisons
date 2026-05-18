@@ -2,7 +2,7 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Engine } from './engine';
 import { ENGINE_LIST, resolveEngineId } from './registry';
 import { COMMAND_PALETTE_COMMANDS, filterCommands } from './scenario';
-import type { FloatingPanel, ModalSpec, WorkspaceSnapshot } from './types';
+import type { DockAnchor, FloatingPanel, ModalSpec, WorkspaceSnapshot } from './types';
 import './styles.css';
 
 export function App() {
@@ -15,16 +15,46 @@ export function App() {
   useEffect(() => () => engine.dispose(), [engine]);
   useEffect(() => engine.loadLayout(), [engine]);
 
-  // Global keyboard handler
+  // Command palette: when user picks a command, dispatch it via the engine.
+  const runCommand = useMemo(() => {
+    return (cmdId: string) => {
+      const s = engine.snapshot();
+      const focused = s.focused;
+      if (cmdId === 'open:note') engine.openPanel('note');
+      else if (cmdId === 'open:inspector') engine.openPanel('inspector');
+      else if (cmdId === 'close:focused' && focused) engine.close(focused);
+      else if (cmdId === 'dock:focused:left' && focused) engine.dock(focused, 'left');
+      else if (cmdId === 'dock:focused:right' && focused) engine.dock(focused, 'right');
+      else if (cmdId === 'dock:focused:bottom' && focused) engine.dock(focused, 'bottom');
+      else if (cmdId === 'undock:focused' && focused) engine.undock(focused);
+      else if (cmdId === 'workspace:reset') engine.reset();
+    };
+  }, [engine]);
+  const openPalette = useMemo(() => {
+    return async () => {
+      const cmdId = await engine.openCommandPalette(COMMAND_PALETTE_COMMANDS);
+      if (cmdId) runCommand(cmdId);
+    };
+  }, [engine, runCommand]);
+
+  // Global keyboard handler. We intercept ⌘K / Ctrl+K ourselves so the
+  // command palette result actually runs through `runCommand`. Everything
+  // else (ESC / ⌘W) is engine business.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        openPalette();
+        return;
+      }
       if (engine.onKey({ key: e.key, meta: e.metaKey, ctrl: e.ctrlKey })) {
         e.preventDefault();
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [engine]);
+  }, [engine, openPalette]);
 
   // Global pointermove / pointerup (drag continues outside the window frame)
   useEffect(() => {
@@ -50,27 +80,80 @@ export function App() {
   const wsClass = `workspace ${interactionKind ? `is-${interactionKind === 'drag' ? 'dragging' : 'resizing'}` : ''}`;
   const topModal = snap.modals[snap.modals.length - 1];
 
+  // Find which panel is in each dock slot.
+  const allPanels = Object.values(snap.panels);
+  const dockLeft = allPanels.find((p) => p.dock === 'left');
+  const dockRight = allPanels.find((p) => p.dock === 'right');
+  const dockBottom = allPanels.find((p) => p.dock === 'bottom');
+
+  const gridStyle = {
+    '--dock-left-w': dockLeft ? `${snap.dockSizes.left}px` : '0px',
+    '--dock-right-w': dockRight ? `${snap.dockSizes.right}px` : '0px',
+    '--dock-bottom-h': dockBottom ? `${snap.dockSizes.bottom}px` : '0px',
+  } as React.CSSProperties;
+
   return (
     <>
       <EngineBar engine={engine} currentId={engineId} snap={snap} />
-      <div className={wsClass}>
-        <HeroBar engine={engine} hasPanels={Object.keys(snap.panels).length > 0} />
-        {snap.zOrder.map((id, i) => {
-          const p = snap.panels[id];
-          if (!p) return null;
-          return (
-            <Panel
-              key={p.id}
-              panel={p}
-              focused={snap.focused === p.id}
-              z={i + 10}
-              engine={engine}
-            />
-          );
-        })}
+      <div className={wsClass} style={gridStyle}>
+        {dockLeft && (
+          <DockSlot anchor="left" panel={dockLeft} focused={snap.focused === dockLeft.id} engine={engine} />
+        )}
+        <div className="main-area">
+          <HeroBar engine={engine} hasPanels={snap.zOrder.length > 0} openPalette={openPalette} />
+          {snap.zOrder.map((id, i) => {
+            const p = snap.panels[id];
+            if (!p || p.dock !== null) return null;
+            return (
+              <Panel
+                key={p.id}
+                panel={p}
+                focused={snap.focused === p.id}
+                z={i + 10}
+                engine={engine}
+              />
+            );
+          })}
+        </div>
+        {dockRight && (
+          <DockSlot anchor="right" panel={dockRight} focused={snap.focused === dockRight.id} engine={engine} />
+        )}
+        {dockBottom && (
+          <DockSlot anchor="bottom" panel={dockBottom} focused={snap.focused === dockBottom.id} engine={engine} />
+        )}
       </div>
       {topModal && <ModalLayer engine={engine} modal={topModal} />}
     </>
+  );
+}
+
+function DockSlot({
+  anchor, panel, focused, engine,
+}: { anchor: DockAnchor; panel: FloatingPanel; focused: boolean; engine: Engine }) {
+  const handleResize = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    engine.startDockResize(anchor, e.clientX, e.clientY);
+  };
+  return (
+    <div
+      className={`dock dock-${anchor} ${focused ? 'is-focused' : ''} kind-${panel.kind}`}
+      onPointerDown={() => engine.focus(panel.id)}
+    >
+      <PanelHeader panel={panel} focused={focused} engine={engine} dragEnabled={false} />
+      <div className="body">
+        {panel.kind === 'note' ? (
+          <textarea
+            value={panel.body}
+            onChange={(e) => engine.setBody(panel.id, e.target.value)}
+            placeholder="Start typing…"
+          />
+        ) : (
+          <InspectorView body={panel.body} />
+        )}
+      </div>
+      <div className={`dock-divider dock-divider-${anchor}`} onPointerDown={handleResize} />
+    </div>
   );
 }
 
@@ -97,45 +180,30 @@ function EngineBar({
   );
 }
 
-function HeroBar({ engine, hasPanels }: { engine: Engine; hasPanels: boolean }) {
+function HeroBar({
+  engine, hasPanels, openPalette,
+}: { engine: Engine; hasPanels: boolean; openPalette: () => void }) {
   return (
     <div className={`hero-bar ${hasPanels ? 'is-compact' : 'is-empty'}`}>
       {!hasPanels && (
         <p className="hero-tagline">
           Open windows, drag them around, resize from the corner.<br />
-          Hit <kbd>⌘K</kbd> to run a command.
+          Dock to <kbd>⇤</kbd> <kbd>⇩</kbd> <kbd>⇥</kbd> from the title bar.
+          Hit <kbd>⌘K</kbd> for the command palette.
         </p>
       )}
       <div className="hero-actions">
-        <button
-          className="hero-btn primary"
-          onClick={() => engine.openPanel('note')}
-        >
+        <button className="hero-btn primary" onClick={() => engine.openPanel('note')}>
           <span className="hero-btn-glyph">📝</span>
-          <span>
-            New note
-            <small>editable text</small>
-          </span>
+          <span>New note<small>editable text</small></span>
         </button>
-        <button
-          className="hero-btn"
-          onClick={() => engine.openPanel('inspector')}
-        >
+        <button className="hero-btn" onClick={() => engine.openPanel('inspector')}>
           <span className="hero-btn-glyph">🔍</span>
-          <span>
-            New inspector
-            <small>structured info</small>
-          </span>
+          <span>New inspector<small>structured info</small></span>
         </button>
-        <button
-          className="hero-btn"
-          onClick={() => engine.openCommandPalette(COMMAND_PALETTE_COMMANDS)}
-        >
+        <button className="hero-btn" onClick={openPalette}>
           <span className="hero-btn-glyph">⌘K</span>
-          <span>
-            Command palette
-            <small>run any command</small>
-          </span>
+          <span>Command palette<small>run any command</small></span>
         </button>
       </div>
     </div>
@@ -145,11 +213,6 @@ function HeroBar({ engine, hasPanels }: { engine: Engine; hasPanels: boolean }) 
 function Panel({
   panel, focused, z, engine,
 }: { panel: FloatingPanel; focused: boolean; z: number; engine: Engine }) {
-  const handleTitlePointer = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    engine.startDrag(panel.id, e.clientX, e.clientY);
-  };
   const handleResizePointer = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -164,20 +227,7 @@ function Panel({
       }}
       onPointerDown={() => engine.focus(panel.id)}
     >
-      <div className="title-bar" onPointerDown={handleTitlePointer}>
-        <span className="kind-chip">{panel.kind}</span>
-        <span className="title">{panel.title}</span>
-        <button
-          className="close"
-          aria-label="Close"
-          onClick={(e) => {
-            e.stopPropagation();
-            engine.close(panel.id);
-          }}
-        >
-          ×
-        </button>
-      </div>
+      <PanelHeader panel={panel} focused={focused} engine={engine} dragEnabled />
       <div className="body">
         {panel.kind === 'note' ? (
           <textarea
@@ -190,6 +240,49 @@ function Panel({
         )}
       </div>
       <div className="resize-handle" onPointerDown={handleResizePointer} />
+    </div>
+  );
+}
+
+function PanelHeader({
+  panel, focused, engine, dragEnabled,
+}: { panel: FloatingPanel; focused: boolean; engine: Engine; dragEnabled: boolean }) {
+  void focused;
+  const handleTitlePointer = (e: React.PointerEvent) => {
+    if (!dragEnabled || e.button !== 0) return;
+    if (e.target !== e.currentTarget && (e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
+    engine.startDrag(panel.id, e.clientX, e.clientY);
+  };
+  const docked = panel.dock !== null;
+  return (
+    <div
+      className={`title-bar ${dragEnabled ? '' : 'no-drag'}`}
+      onPointerDown={handleTitlePointer}
+    >
+      <span className="kind-chip">{panel.kind}</span>
+      <span className="title">{panel.title}</span>
+      <div className="dock-buttons" onPointerDown={(e) => e.stopPropagation()}>
+        {docked ? (
+          <button className="dock-btn" title="Float" onClick={() => engine.undock(panel.id)}>↗</button>
+        ) : (
+          <>
+            <button className="dock-btn" title="Dock left" onClick={() => engine.dock(panel.id, 'left')}>⇤</button>
+            <button className="dock-btn" title="Dock bottom" onClick={() => engine.dock(panel.id, 'bottom')}>⇩</button>
+            <button className="dock-btn" title="Dock right" onClick={() => engine.dock(panel.id, 'right')}>⇥</button>
+          </>
+        )}
+      </div>
+      <button
+        className="close"
+        aria-label="Close"
+        onClick={(e) => {
+          e.stopPropagation();
+          engine.close(panel.id);
+        }}
+      >
+        ×
+      </button>
     </div>
   );
 }

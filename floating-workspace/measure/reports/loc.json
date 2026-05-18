@@ -1,50 +1,50 @@
 {
-  "measuredAt": "2026-05-18T07:31:37.182Z",
+  "measuredAt": "2026-05-18T08:24:34.414Z",
   "rows": [
     {
       "engine": "redux-thunk",
-      "loc": 206,
-      "bytes": 9308
-    },
-    {
-      "engine": "reatom",
-      "loc": 211,
-      "bytes": 8903
+      "loc": 253,
+      "bytes": 11591
     },
     {
       "engine": "rtk-listener",
-      "loc": 212,
-      "bytes": 9486
-    },
-    {
-      "engine": "effector",
-      "loc": 217,
-      "bytes": 9773
+      "loc": 259,
+      "bytes": 11865
     },
     {
       "engine": "redux-saga",
-      "loc": 217,
-      "bytes": 9674
+      "loc": 264,
+      "bytes": 11957
+    },
+    {
+      "engine": "reatom",
+      "loc": 266,
+      "bytes": 11190
+    },
+    {
+      "engine": "effector",
+      "loc": 270,
+      "bytes": 12258
     },
     {
       "engine": "rxjs",
-      "loc": 257,
-      "bytes": 11341
+      "loc": 309,
+      "bytes": 13788
     },
     {
       "engine": "naked",
-      "loc": 271,
-      "bytes": 9238
+      "loc": 330,
+      "bytes": 12035
     },
     {
       "engine": "triggery",
-      "loc": 332,
-      "bytes": 13227
+      "loc": 391,
+      "bytes": 15944
     },
     {
       "engine": "xstate",
-      "loc": 352,
-      "bytes": 15215
+      "loc": 424,
+      "bytes": 18739
     }
   ]
 }

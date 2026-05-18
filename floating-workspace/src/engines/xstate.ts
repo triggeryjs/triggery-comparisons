@@ -12,6 +12,7 @@ import {
   MAX_PANELS,
   PERSIST_DEBOUNCE_MS,
   POINTER_THROTTLE_MS,
+  clampDockSize,
   clampPanelToViewport,
   clampResize,
   clearPersistedLayout,
@@ -21,11 +22,13 @@ import {
   emptySnapshot,
   genId,
   getViewport,
+  panelInDock,
   persistLayout,
   readPersistedLayout,
   snapToEdges,
 } from '../scenario';
 import type {
+  DockAnchor,
   FloatingPanel,
   Interaction,
   ModalSpec,
@@ -47,8 +50,11 @@ type Ev =
   | { type: 'FOCUS'; id: string }
   | { type: 'SET_QUERY'; q: string }
   | { type: 'SET_BODY'; id: string; body: string }
+  | { type: 'DOCK'; id: string; anchor: DockAnchor }
+  | { type: 'UNDOCK'; id: string }
   | { type: 'START_DRAG'; id: string; px: number; py: number }
   | { type: 'START_RESIZE'; id: string; px: number; py: number }
+  | { type: 'START_DOCK_RESIZE'; anchor: DockAnchor; px: number; py: number }
   | { type: 'POINTER_MOVE'; px: number; py: number }
   | { type: 'POINTER_UP' }
   | { type: 'APPLY_MOVE' }
@@ -121,8 +127,47 @@ const machine = setup({
     focusTop: assign(({ context, event }) => {
       if (event.type !== 'FOCUS' && event.type !== 'START_DRAG' && event.type !== 'START_RESIZE') return {};
       const id = event.id;
-      if (!context.panels[id]) return {};
+      const panel = context.panels[id];
+      if (!panel) return {};
+      if (panel.dock !== null) return { focused: id };
       return { zOrder: moveTop(context.zOrder, id), focused: id };
+    }),
+    dockAction: assign(({ context, event }) => {
+      if (event.type !== 'DOCK') return {};
+      const panel = context.panels[event.id];
+      if (!panel) return {};
+      const existing = panelInDock(context.panels, event.anchor);
+      let panels = context.panels;
+      let zOrder = context.zOrder;
+      if (existing && existing.id !== event.id) {
+        const restored: FloatingPanel = { ...existing, dock: null, x: 80, y: 80 };
+        panels = { ...panels, [restored.id]: restored };
+        if (!zOrder.includes(restored.id)) zOrder = [...zOrder, restored.id];
+      }
+      panels = { ...panels, [event.id]: { ...panel, dock: event.anchor } };
+      zOrder = zOrder.filter((x) => x !== event.id);
+      return { panels, zOrder, focused: event.id };
+    }),
+    undockAction: assign(({ context, event }) => {
+      if (event.type !== 'UNDOCK') return {};
+      const panel = context.panels[event.id];
+      if (!panel || panel.dock === null) return {};
+      const floating = { ...panel, dock: null, x: panel.x || 96, y: panel.y || 96 };
+      return {
+        panels: { ...context.panels, [event.id]: floating },
+        zOrder: context.zOrder.includes(event.id) ? context.zOrder : [...context.zOrder, event.id],
+        focused: event.id,
+      };
+    }),
+    setDockResizeInteraction: assign(({ context, event }) => {
+      if (event.type !== 'START_DOCK_RESIZE') return {};
+      const interaction: Interaction = {
+        kind: 'dock-resize',
+        anchor: event.anchor,
+        startSize: context.dockSizes[event.anchor],
+        startPointer: event.anchor === 'bottom' ? event.py : event.px,
+      };
+      return { interaction };
     }),
     addModal: assign(({ context, event }) =>
       event.type === 'OPEN_MODAL' ? { modals: [...context.modals, event.spec] } : {},
@@ -133,7 +178,7 @@ const machine = setup({
     setDragInteraction: assign(({ context, event }) => {
       if (event.type !== 'START_DRAG') return {};
       const panel = context.panels[event.id];
-      if (!panel) return {};
+      if (!panel || panel.dock !== null) return {};
       const interaction: Interaction = {
         kind: 'drag', id: event.id,
         offset: { x: event.px - panel.x, y: event.py - panel.y },
@@ -143,7 +188,7 @@ const machine = setup({
     setResizeInteraction: assign(({ context, event }) => {
       if (event.type !== 'START_RESIZE') return {};
       const panel = context.panels[event.id];
-      if (!panel) return {};
+      if (!panel || panel.dock !== null) return {};
       const interaction: Interaction = {
         kind: 'resize', id: event.id,
         startSize: { w: panel.w, h: panel.h },
@@ -156,9 +201,16 @@ const machine = setup({
       const inter = context.interaction;
       const p = context.pendingPointer;
       if (!inter || !p) return {};
+      const viewport = getViewport();
+      if (inter.kind === 'dock-resize') {
+        const cur = inter.anchor === 'bottom' ? p.y : p.x;
+        let delta = cur - inter.startPointer;
+        if (inter.anchor === 'right' || inter.anchor === 'bottom') delta = -delta;
+        const size = clampDockSize(inter.anchor, inter.startSize + delta, viewport);
+        return { dockSizes: { ...context.dockSizes, [inter.anchor]: size } };
+      }
       const panel = context.panels[inter.id];
       if (!panel) return {};
-      const viewport = getViewport();
       if (inter.kind === 'drag') {
         const moved = { ...panel, x: p.x - inter.offset.x, y: p.y - inter.offset.y };
         const snapped = snapToEdges(clampPanelToViewport(moved, viewport), viewport);
@@ -176,11 +228,12 @@ const machine = setup({
     loadLayout: assign(() => {
       const layout = readPersistedLayout();
       if (!layout) return {};
-      const surviving = layout.zOrder.filter((id) => layout.panels[id]);
+      const surviving = layout.zOrder.filter((id) => layout.panels[id] && layout.panels[id].dock === null);
       return {
         ...emptySnapshot(),
         panels: layout.panels,
         zOrder: surviving,
+        dockSizes: layout.dockSizes ?? undefined,
         focused: surviving.includes(layout.focused ?? '') ? layout.focused : (surviving[surviving.length - 1] ?? null),
       };
     }),
@@ -201,6 +254,8 @@ const machine = setup({
     FOCUS: { actions: ['focusTop', cancel('persist-debounce'), raise({ type: 'PERSIST' }, { delay: PERSIST_DEBOUNCE_MS, id: 'persist-debounce' })] },
     SET_QUERY: { actions: 'setQuery' },
     SET_BODY: { actions: ['setBody', cancel('persist-debounce'), raise({ type: 'PERSIST' }, { delay: PERSIST_DEBOUNCE_MS, id: 'persist-debounce' })] },
+    DOCK: { actions: ['dockAction', cancel('persist-debounce'), raise({ type: 'PERSIST' }, { delay: PERSIST_DEBOUNCE_MS, id: 'persist-debounce' })] },
+    UNDOCK: { actions: ['undockAction', cancel('persist-debounce'), raise({ type: 'PERSIST' }, { delay: PERSIST_DEBOUNCE_MS, id: 'persist-debounce' })] },
     PERSIST: { actions: 'persist' },
     LOAD_LAYOUT: { actions: 'loadLayout' },
     RESET: { actions: ['resetAll', 'clearStorage'] },
@@ -211,6 +266,7 @@ const machine = setup({
       on: {
         START_DRAG: { target: 'dragging', actions: ['focusTop', 'setDragInteraction'] },
         START_RESIZE: { target: 'resizing', actions: ['focusTop', 'setResizeInteraction'] },
+        START_DOCK_RESIZE: { target: 'dockResizing', actions: 'setDockResizeInteraction' },
       },
     },
     dragging: {
@@ -227,6 +283,19 @@ const machine = setup({
       },
     },
     resizing: {
+      on: {
+        POINTER_MOVE: {
+          actions: [
+            'setPendingPointer',
+            cancel('move-throttle'),
+            raise({ type: 'APPLY_MOVE' }, { delay: POINTER_THROTTLE_MS, id: 'move-throttle' }),
+          ],
+        },
+        APPLY_MOVE: { actions: 'applyMove' },
+        POINTER_UP: { target: 'idle', actions: ['clearInteraction', 'persist'] },
+      },
+    },
+    dockResizing: {
       on: {
         POINTER_MOVE: {
           actions: [
@@ -359,8 +428,11 @@ export const xstateFactory: EngineFactory = {
       focus: (id) => actor.send({ type: 'FOCUS', id }),
       setQuery: (q) => actor.send({ type: 'SET_QUERY', q }),
       setBody: (id, body) => actor.send({ type: 'SET_BODY', id, body }),
+      dock: (id, anchor) => actor.send({ type: 'DOCK', id, anchor }),
+      undock: (id) => actor.send({ type: 'UNDOCK', id }),
       startDrag: (id, px, py) => actor.send({ type: 'START_DRAG', id, px, py }),
       startResize: (id, px, py) => actor.send({ type: 'START_RESIZE', id, px, py }),
+      startDockResize: (anchor, px, py) => actor.send({ type: 'START_DOCK_RESIZE', anchor, px, py }),
       pointerMove: (px, py) => actor.send({ type: 'POINTER_MOVE', px, py }),
       pointerUp: () => actor.send({ type: 'POINTER_UP' }),
       onKey(e) {
