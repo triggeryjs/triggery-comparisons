@@ -23,17 +23,17 @@ This is the hardest scenario in the repo. Pointer events at 60 fps are a stream;
 
 |                                  | best                                     | worst                                | triggery |
 |---|---|---|---|
-| **LOC** (engine file only)       | redux-thunk — 168 *(+ 202 shared slice)* | naked — 508                          | **best non-redux** (295) |
+| **LOC** (total, incl. shared slice for redux) | **triggery — 295**          | naked — 508                          | **1st** (43 under reatom, 75 under redux-thunk's 168 + 202 shared) |
 | **Bundle (gzipped)**             | naked — 4.25 KB                          | redux-saga — 18.72 KB                | **3rd** (8.13 KB) |
 | **API surface (symbols)**        | **triggery — 2** *(tied)*                | rxjs — 12 symbols                    | **1st** *(tied with effector)* |
 | **Dependency footprint**         | naked — 0 packages                       | redux-saga — 12 packages             | **tied 2nd** *(1 package)* |
 | **Drag throughput (events/sec)** | naked — 9.07M *(throttle-honoring)*      | rtk-listener — 37k                   | 6th (1.95M) |
 | **setBody latency p50**          | naked — 0.54 µs                          | rtk-listener — 7.9 µs                | 4th (3.1 µs) |
-| **Cyclomatic complexity**        | redux-saga — 32 *(slice excluded)*       | rxjs — 116                           | **4th** (88) |
+| **Cyclomatic complexity** (total, incl. shared slice) | **triggery — 88**            | rxjs — 116                           | **1st** (under redux trio's 97-101 combined) |
 
 Three things to read off this honest table:
 
-1. **Triggery wins LOC among single-file engines.** 295 LOC — beats Reatom (338), Effector (356), RxJS (386), XState (498), naked (508). The three Redux engines look smaller (168-172 LOC each) but only because they share `_redux-slice.ts` (202 LOC); count both and they land at ≈ 370 — above Triggery. The single `mutate(fn)` event + closure state + extracted `applyMove` helper keeps the engine file genuinely small.
+1. **Triggery wins LOC outright.** 295 total LOC — beats Reatom (338), Effector (356), Redux trio (370-374 once you count the shared `_redux-slice.ts`), RxJS (386), XState (498), naked (508). The redux engines' "168 LOC" file is misleading on its own — a user adopting redux-thunk has to read both the engine file *and* the slice; total maintenance surface is ≈ 370 LOC. Triggery's 295 is a single file, no hidden second half. The single `mutate(fn)` event + closure state + extracted `applyMove` helper keeps the engine genuinely small.
 2. **Triggery's home turf is still bundle, API surface, dependency footprint.** 8.13 KB gz (3rd, beats both redux + rxjs + xstate), 2 symbols (`createTrigger` + `createRuntime`), 1 npm package. The Redux family ships 5 packages just to start; saga ships 12.
 3. **Drag throughput climbed from 269k → ~2M ev/sec** across two passes (run-to-run variance is wide — typical range 1.4M–2.5M depending on GC + system load). First, the pointer-move path moved from `runtime.fire('pointer-move')` (where `actions.throttle` correctly dropped 997 fires but the trigger pipeline still ran 1000×) to a closure-throttle at the call site. Then **three transient streams** — `pointerMove`, `setCursor`, `setTileDropTarget` — were bypassed away from `mutate(fn)` entirely (direct state assign + `emit()`). The bypass is **semantically correct**, not just faster: those three update transient state that nothing else reacts to via `subscribeAction` (cursor isn't persisted, drop-target is reset on pointer-up, drag mid-positions shouldn't hit localStorage). The trigger still owns every user-driven transition (open / close / focus / setBody / arrange / splitTile / mode toggle / pointerUp / etc) where `actions.debounce(1000).persist?.(state)` declaratively schedules the layout write. **XState, RTK listener, redux-saga** stay the outliers — their idiomatic `cancel + delay` / `throttle(effect)` patterns fire 1000+ snapshots from 1000 events (debounce-shaped, not throttle-shaped). We call that out honestly below.
 
@@ -139,18 +139,19 @@ Numbers live in `measure/reports/` and are committed.
 
 LOC (non-comment, non-blank) of `src/engines/<engine>.ts`:
 
-| engine | LOC | bytes |
-|---|---:|---:|
-| redux-thunk  | 168 *(+ slice 202)* |  8126 |
-| redux-saga   | 169 *(+ slice 202)* |  8347 |
-| rtk-listener | 172 *(+ slice 202)* |  8575 |
-| **triggery** | **295** | **14587** |
-| reatom       | 338 | 14956 |
-| effector     | 356 | 18760 |
-| rxjs         | 386 | 19417 |
-| xstate       | 498 | 22790 |
-| naked        | 508 | 17722 |
-| `_redux-slice.ts` (shared) | 202 | 10335 |
+Total LOC = engine file + any code it imports from a sibling helper module. The redux trio share [`_redux-slice.ts`](./src/engines/_redux-slice.ts) (202 LOC) — they're sorted by **total** maintenance surface, not engine-file-only, because that's what a user actually has to read.
+
+| engine | engine file | shared slice | **total LOC** |
+|---|---:|---:|---:|
+| **triggery** | 295 | — | **295** |
+| reatom       | 338 | — | 338 |
+| effector     | 356 | — | 356 |
+| redux-thunk  | 168 | 202 | 370 |
+| redux-saga   | 169 | 202 | 371 |
+| rtk-listener | 172 | 202 | 374 |
+| rxjs         | 386 | — | 386 |
+| xstate       | 498 | — | 498 |
+| naked        | 508 | — | 508 |
 
 Bundle size — engine + transitive deps, esbuild ES2022 ESM, React externalised, `production` export condition:
 
@@ -211,20 +212,21 @@ Two shapes per engine, single canonical run on M1 Pro / Node 20:
 
 ### Complexity & type safety
 
-| engine | cyclomatic | max nesting | `as` casts | `!` non-null |
-|---|---:|---:|---:|---:|
-| redux-saga   |    32 |       6 |  1 |  0 |
-| rtk-listener |    33 |       7 |  1 |  0 |
-| redux-thunk  |    36 |       6 |  1 |  0 |
-| `_redux-slice` |   65 |       5 |  1 |  3 |
-| **triggery** |    **88** |       **8** |  **2** |  **4** |
-| xstate       |    92 |      11 |  1 |  3 |
-| naked        |    94 |       8 |  1 |  4 |
-| effector     |    94 |       7 |  1 |  3 |
-| reatom       |    94 |       9 |  1 |  3 |
-| rxjs         |   116 |       7 |  1 |  3 |
+Sorted by **total** cyclomatic (engine file + any shared slice it imports), same logic as the LOC table. Redux trio's engine-file cyclo (32-36) looks low only because the branching lives in `_redux-slice.ts` (cyclo 65) — combined total per redux engine is 97-101.
 
-The Redux trio look low because most logic is in the shared slice (cyclo 65, counted once). The combined-per-engine cyclomatic for redux-thunk is ≈ 101, redux-saga ≈ 97, rtk-listener ≈ 98 — putting them in the same band as the non-redux engines, not below them. Triggery's 88 is **the lowest single-file count among non-redux engines**, beating xstate / naked / effector / reatom / rxjs.
+| engine | total cyclo | engine cyclo | + slice cyclo | max nesting | `as` casts | `!` non-null |
+|---|---:|---:|---:|---:|---:|---:|
+| **triggery** |    **88** | 88 | — | 8 | 2 | 4 |
+| xstate       |    92 | 92 | — | 11 | 1 | 3 |
+| naked        |    94 | 94 | — | 8 | 1 | 4 |
+| effector     |    94 | 94 | — | 7 | 1 | 3 |
+| reatom       |    94 | 94 | — | 9 | 1 | 3 |
+| redux-saga   |    97 | 32 | 65 | 6 | 1 | 0 |
+| rtk-listener |    98 | 33 | 65 | 7 | 1 | 0 |
+| redux-thunk  |   101 | 36 | 65 | 6 | 1 | 0 |
+| rxjs         |   116 | 116 | — | 7 | 1 | 3 |
+
+Triggery's 88 is the **lowest total** in the matrix — beats redux trio (which look small per-file but pay 65 cyclo of branching in the shared slice), as well as xstate / naked / effector / reatom / rxjs.
 
 ### Dependency footprint
 
@@ -260,7 +262,7 @@ Four axes per engine. 🟢 light · 🟡 medium · 🔴 heavy.
 
 Honest caveats — what the table doesn't capture:
 
-- **The redux trio's reducers are short because the slice is shared.** If you compare engine-files only, redux-thunk wins LOC (168). If you include the slice it has to import (202), the total is ≈ 370 — same band as triggery, effector, rxjs.
+- **The redux trio's engine files are short because the slice is shared.** If you only look at `engines/redux-thunk.ts` you see 168 LOC and assume it's the leanest. But the slice (202 LOC) is part of the same maintenance surface — total responsibility is 370 LOC, above Triggery's single-file 295.
 - **XState's `idle ↔ interacting` flat statechart** is honest about what we built — we did NOT model `drag-floating`, `resize-floating`, `divider-resize` as separate states (that would be 4 nested sub-states with mode-specific transitions, +60-80 LOC). The statechart wins in *enforcement* of "you can't start a resize during a drag", but per-mode dispatch lives in `assign` actions, same as a slice reducer.
 - **RxJS spec ↔ code 🟢** is honest for this scenario — `Subject<Action>` + `scan` + `throttleTime` is the textbook pattern. The 12-symbol API surface is the price.
 - **Triggery's `mutate(fn)` pattern** is the same shape as Reatom's. The difference is the trigger schema (which gives you action observability via `subscribeAction` and the `actions.throttle(16)` declarative one-liner). For this scenario the runtime-cost-per-event is the visible trade-off (slower drag throughput); the cheaper-than-redux bundle and 2-symbol API are the wins.
@@ -272,9 +274,9 @@ Honest caveats — what the table doesn't capture:
 
 Floating-workspace is the **stress test of the scenario set** — pointer streams + recursive tree state + per-panel mode flips + keyboard routing + promise-returning modals + persistent layout all at once. Read the leaderboard like a balance sheet:
 
-- **Redux-thunk wins the per-engine-file LOC** but only because its slice is shared. Honest total: ≈ 370 LOC. Best in band when the side-effect surface is "throttle/debounce + a sync split-resolve on pointer-up" — thunk is the simplest of the three redux variants.
+- **Redux-thunk's engine file is short (168 LOC)** but only because the slice is shared. Honest total: 370 LOC. Best in band when the side-effect surface is "throttle/debounce + a sync split-resolve on pointer-up" — thunk is the simplest of the three redux variants.
 - **Naked wins bundle, drag throughput, and setBody latency** — that's the floor every library has to beat. Reatom comes closest on latency (2.5 µs p50), Triggery on bundle outside of naked/reatom (8.13 KB gz).
-- **Triggery wins single-file LOC (295, best non-redux), API surface (2 symbols, tied with effector), and cyclomatic among non-redux (88)**, plus **bundle 3rd (8.13 KB gz)** and **dependency footprint (1 package)**. Drag throughput ~2M ev/sec — 4-5× behind naked but ≫ what 60 fps demands.
+- **Triggery wins total LOC (295)** — the only library that fits under 300 LOC in this scenario, even after counting redux's shared slice as part of redux's surface. Plus **cyclomatic outright (88 total vs redux trio's 97-101)**, **API surface tied 1st (2 symbols)**, **bundle 3rd (8.13 KB gz)**, **deps 1 package**. Drag throughput ~2M ev/sec — 4-5× behind naked but ≫ what 60 fps demands.
 - **XState wins drag-state-machine readability** in theory — but our pragmatic version flattens to `idle ↔ interacting` because nested mode-specific states (drag-floating / resize-floating / divider-resize) would push LOC past 600. The throttle-vs-debounce caveat is real: real throttle in XState costs another state node.
 - **RxJS wins the drag-as-stream metaphor** with `Subject<Action>` + `scan`. 12 symbols + 12 KB gz is the cost. Best p50 latency (0.92 µs) of any library because the dispatch path is just a `Subject.next`.
 
@@ -322,7 +324,7 @@ pointerMove(px, py) {
 
 This is **semantically correct, not just faster**: cursor isn't persisted, drop-target is reset on pointer-up, and drag mid-positions shouldn't hit localStorage. Passing those through the trigger would (a) schedule a persist write per pointer-move (wrong) and (b) pay the `runtime.fire` cost on every surviving event. `pointerUp` re-enters via `mutate` so persist still fires after the gesture settles.
 
-The two-pass optimization on the pointer-move path: **269k → ~2M ev/sec** — first by moving the gate from `actions.throttle` inside the handler to a closure-throttle at the call site, then by full bypass of the trigger for the throttle-surviving events. Run-to-run variance is wide on this bench (1.3M-2.5M depending on GC), so we don't quote a single precise number — anything in that range is comfortably above what 60 fps demands. The `actions.debounce(1000).persist` showcase stays on the path it actually amortises — one debounced write across many user-driven mutations. **295 LOC** (best non-redux).
+The two-pass optimization on the pointer-move path: **269k → ~2M ev/sec** — first by moving the gate from `actions.throttle` inside the handler to a closure-throttle at the call site, then by full bypass of the trigger for the throttle-surviving events. Run-to-run variance is wide on this bench (1.3M-2.5M depending on GC), so we don't quote a single precise number — anything in that range is comfortably above what 60 fps demands. The `actions.debounce(1000).persist` showcase stays on the path it actually amortises — one debounced write across many user-driven mutations. **295 total LOC — the smallest in the matrix**.
 
 ### `xstate`
 
@@ -346,7 +348,7 @@ Shared slice (202 LOC) + listenerMiddleware with three listeners (pointer-move t
 
 ### `redux-thunk`
 
-Same slice + 2 thunks (`pointerMoveThunk` reads store state to bail on null interaction, `pointerUpThunk` resolves drag-tiled splits). Hand-rolled `lastMoveTime` throttle + `setTimeout` debounce. **Smallest engine file in the matrix (168 LOC)** thanks to the shared slice carrying the bulk of the logic. ≈ 168 LOC engine + 202 LOC slice.
+Same slice + 2 thunks (`pointerMoveThunk` reads store state to bail on null interaction, `pointerUpThunk` resolves drag-tiled splits). Hand-rolled `lastMoveTime` throttle + `setTimeout` debounce. Engine file is the smallest (168 LOC), but **total maintenance surface is 370 LOC** once you add the shared `_redux-slice.ts` (202).
 
 ### `redux-saga`
 

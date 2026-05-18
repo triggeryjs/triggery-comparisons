@@ -60,15 +60,15 @@ Two scenarios shipped so far. They probe different shapes of the same problem sp
 
 | axis | leader | triggery |
 |---|---|---|
-| **LOC** | redux-thunk — 168 *(+ 202 shared slice)* | **best non-redux** (295 — single file) |
+| **LOC** (total, incl. redux's shared slice) | **triggery — 295** | **1st** (43 under reatom, 75 under redux-thunk's 370 total) |
 | **API surface** | **triggery / effector — 2 symbols** *(tied)* | **1st** *(tied)* |
 | **Bundle (gzipped)** | naked — 4.25 KB | 3rd (8.13 KB — beats redux trio + rxjs + xstate) |
 | **Dependency footprint** | naked — 0 packages | **tied 2nd** *(1 package)* |
 | **Drag throughput** | naked — 9.07M ev/sec *(throttle-honoring)* | 6th (~2M — closure-throttle + transient-stream bypass; run-to-run variance is wide) |
 | **Latency p50** | naked — 0.54 µs | 4th (3.1 µs) |
-| **Cyclomatic complexity** | redux-saga — 32 *(slice excluded)* | **best non-redux** (88) |
+| **Cyclomatic complexity** (total, incl. shared slice) | **triggery — 88** | **1st** (under redux trio's 97-101 combined) |
 
-> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it wins single-file LOC (295) and cyclomatic (88) among non-redux engines**, plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. The trio of redux engines look small per-file only because they share a 202-LOC slice — count both files and they land at ≈ 370, above triggery. Drag throughput climbed from 269k to ~2M ev/sec (canonical run shows 1.95M; run-to-run variance is wide, 1.3M-2.5M) across two passes: (1) closure-throttle at the call site instead of `actions.throttle` inside the trigger handler, then (2) the three transient-stream methods (`pointerMove`, `setCursor`, `setTileDropTarget`) bypass `runtime.fire('mutate')` entirely — direct state assign + emit. The bypass is semantically correct (those three update state nothing else reacts to and shouldn't trigger persist), not just faster. **Each scenario rewards a different mental model — that's the point.**
+> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it wins outright on total LOC (295) and total cyclomatic (88)** — even after the redux trio's "168 LOC engine file" honestly accounts for the shared 202-LOC slice (total 370). Plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. Drag throughput climbed from 269k to ~2M ev/sec (canonical run shows 1.95M; run-to-run variance is wide, 1.3M-2.5M) across two passes: (1) closure-throttle at the call site instead of `actions.throttle` inside the trigger handler, then (2) the three transient-stream methods (`pointerMove`, `setCursor`, `setTileDropTarget`) bypass `runtime.fire('mutate')` entirely — direct state assign + emit. The bypass is semantically correct (those three update state nothing else reacts to and shouldn't trigger persist), not just faster. **Each scenario rewards a different mental model — that's the point.**
 
 ## What we measure
 
