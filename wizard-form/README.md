@@ -23,11 +23,11 @@ For the spec in this folder (see [acceptance behaviour](#acceptance-behaviour-th
 
 |                                | best library             | worst library              | triggery |
 |---|---|---|---|
-| **LOC**                        | **triggery — 190**         | xstate — 376               | **1st** (10 LOC under naked baseline 196) |
+| **LOC**                        | **triggery — 190**         | xstate — 376               | **1st** (6 LOC under naked baseline 196) |
 | **API surface**                | **triggery — 1 import / 2 symbols** | rxjs — 2 imports / 18 symbols | **1st** |
 | **Cyclomatic complexity**      | **triggery — 28**          | redux-thunk — 43           | **1st** |
 | **Bundle (gzipped)**           | reatom — 4.44 KB           | redux-saga — 16.14 KB      | 2nd (6.08 KB) |
-| **Throughput (setField/sec)**  | rxjs — 358k op/sec         | rtk — 35k op/sec           | 4th (177k) |
+| **Throughput (setField/sec)**  | rxjs — 306k op/sec         | rtk — 33k op/sec           | 4th (180k) |
 | **Latency p50**                | reatom — 2.1 µs            | rtk — 11 µs                | 3rd (2.5 µs) |
 | **Scaling: +2 async fields (Δ LOC)** | triggery — +27 *(table-driven)* | xstate — +93 | **best** |
 
@@ -37,7 +37,7 @@ Three things to read off this table:
 2. **Triggery is shorter than the naked baseline** — 190 vs 196 LOC. That's the rare line: a library that adds structure but subtracts code, because `actions.debounce(N).checkX()` is one line whereas naked needs `setTimeout`/`clearTimeout`/reqId-counter/race-guard per async field × 3.
 3. **xstate falls out of contention as the wizard grows.** v1 (1 async field): xstate was the readability winner with 3rd-lowest cyclomatic. v2 (3 async fields): xstate is now the longest, second-slowest, with 36 cyclomatic. Every new async source needs a new debounce id + raise + cancel + invoked actor — the statechart's declarative-transitions advantage doesn't extend to per-field async machinery.
 
-> Trade-off honesty: the table-dispatch refactor shaved cyclomatic (46→28) and LOC (219→190) but cost throughput (206k→177k op/sec, -14%) — an `if/else` chain is a hair faster than an object-lookup. The trade — denser metrics, slightly less raw throughput — is the right one for a form (where throughput is irrelevant since users type at human speed).
+> Trade-off honesty: the table-dispatch refactor shaved cyclomatic (46→28) and LOC (219→190) but cost some throughput (~14% vs the if-chain version) — an `if/else` chain is a hair faster than an object-lookup. The trade — denser metrics, slightly less raw throughput — is the right one for a form (where throughput is irrelevant since users type at human speed).
 
 - [`triggery`](./src/engines/triggery.ts) — **two** triggers (editing + nav), `actions.debounce(N).checkX()` per async field
 - [`xstate`](./src/engines/xstate.ts) — statechart + 3 cancellable raises + invoked submit actor
@@ -135,15 +135,15 @@ Throughput = 1000 sequential `setField('name', …)` calls flushed once at the e
 
 | engine | throughput | p50 lat. | p95 lat. | p99 lat. |
 |---|---:|---:|---:|---:|
-| Naked baseline         | 1747k ops/sec |  0.46 µs |  0.50 µs |  0.58 µs |
-| RxJS                   |  358k ops/sec |   2.2 µs |   2.3 µs |   3.1 µs |
-| Reatom                 |  275k ops/sec |   2.1 µs |   2.8 µs |   7.2 µs |
-| **Triggery**           |  **177k ops/sec** |   **2.5 µs** |   **3.2 µs** |   **7.1 µs** |
-| Redux + thunk          |   85k ops/sec |   9.4 µs |    10 µs |    16 µs |
-| XState                 |   79k ops/sec |   6.5 µs |   9.7 µs |    20 µs |
-| Redux + saga           |   64k ops/sec |   9.7 µs |    11 µs |    14 µs |
-| Effector               |   64k ops/sec |   5.9 µs |   6.8 µs |    14 µs |
-| RTK listenerMiddleware |   35k ops/sec |    11 µs |    12 µs |    21 µs |
+| Naked baseline         | 1111k ops/sec |  0.46 µs |  0.50 µs |  0.71 µs |
+| RxJS                   |  306k ops/sec |   2.3 µs |   2.5 µs |   3.5 µs |
+| Reatom                 |  221k ops/sec |   2.1 µs |   3.0 µs |    13 µs |
+| **Triggery**           |  **180k ops/sec** |   **2.5 µs** |   **3.2 µs** |   **6.5 µs** |
+| Redux + thunk          |   91k ops/sec |   9.5 µs |    11 µs |    30 µs |
+| XState                 |   65k ops/sec |   6.6 µs |   9.2 µs |    25 µs |
+| Effector               |   64k ops/sec |   5.8 µs |   7.5 µs |    13 µs |
+| Redux + saga           |   56k ops/sec |   9.8 µs |    11 µs |    25 µs |
+| RTK listenerMiddleware |   33k ops/sec |    11 µs |    12 µs |    27 µs |
 
 RxJS still wins this scenario's perf — a `Subject<Action>` + `scan` reducer is essentially the naked baseline plus a thin operator wrapper. Triggery's table-dispatch refactor (which dropped cyclomatic 46→28 and LOC 219→190) cost ~14% throughput vs the if-chain version — an honest trade for a form scenario where users type at human speed.
 
@@ -247,11 +247,11 @@ Diff between v1 (email only) and v2 (email + username + referral) per engine:
 Wizard-form is the **opposite scenario** to notifications-pipeline: there, gating + throttle + debounce + fan-out across many events; here, multi-step navigation **with three independent async-validated fields, each with its own race-conditions**. The shape of the problem reshuffles the leaderboard.
 
 - **Triggery wins LOC + API surface + bundle (after reatom).** `actions.debounce(N).checkX()` is the **declarative primitive** for "fire async after a quiet period" — adding the second and third async fields costs ≈ 5 LOC each. Every other engine has to hand-roll some equivalent: `setTimeout` + clearTimeout + closure-held reqId counter, or `cancelActiveListeners() + delay()`, or `cancel(id) + raise(EV, { delay, id })`, or `debounce(ms, action, saga)`.
-- **Effector tied Triggery on scaling**, and would win it outright if you'd accept patronum (we excluded it for apples-to-apples). The reactive-graph shape scales linearly when you keep adding "one more stream of events" but loses on raw perf (51k op/sec — graph propagation cost per `setField`).
+- **Effector tied Triggery on scaling**, and would win it outright if you'd accept patronum (we excluded it for apples-to-apples). The reactive-graph shape scales linearly when you keep adding "one more stream of events" but loses on raw perf (64k op/sec — graph propagation cost per `setField`).
 - **xstate is the readability winner for the state-machine spine** (the 5-state wizard graph is right there in the file), but **doesn't help with debounced async fields** — those live as `raise + cancel` actions inside the machine, not as state nodes, and each one costs the same boilerplate as in any other engine. If your scenario is "lots of states, no async fields", xstate's home turf. If your scenario is "few states, many async fields", Triggery's home turf.
-- **RxJS wins perf** (276k op/sec, 2.3 µs p50) — same reason as v1: a `Subject<Action>` + `scan` reducer is the minimal viable reactive system.
+- **RxJS wins perf** (306k op/sec, 2.3 µs p50) — same reason as v1: a `Subject<Action>` + `scan` reducer is the minimal viable reactive system.
 - **Reatom keeps its bundle crown** (4.44 KB gz) — atom-as-direct-call is still the tightest packaging.
-- **Redux family**: redux-thunk leads its family by a comfortable margin on perf (84k vs rtk's 32k); redux-saga's `debounce` effect gives the cleanest per-field one-liner of the three but pays in the heaviest bundle (16 KB gz).
+- **Redux family**: redux-thunk leads its family by a comfortable margin on perf (91k vs rtk's 33k); redux-saga's `debounce` effect gives the cleanest per-field one-liner of the three but pays in the heaviest bundle (16 KB gz).
 
 **Where Triggery makes sense for wizard-form:**
 
@@ -276,11 +276,11 @@ The state machine is right there: `account → profile → (team-size | preferen
 
 ### `effector`
 
-11 events, 8 stores, 4 effects, 6 samples. Each new async field is "one event + one store + one effect + one sample chain" — uniform shape, which is why it scales best in the matrix. The throughput tax (51k op/sec) is the reactive-graph propagation cost: every `fieldChanged` walks the graph.
+11 events, 8 stores, 4 effects, 6 samples. Each new async field is "one event + one store + one effect + one sample chain" — uniform shape, which is why it scales best in the matrix. The throughput tax (64k op/sec) is the reactive-graph propagation cost: every `fieldChanged` walks the graph.
 
 ### `rxjs`
 
-`Subject<Action>` upstream, `scan(reduce, initialSnapshot)` reducer, separate `filter + debounceTime + switchMap` streams per async field. The reducer-shape gives the best perf (276k op/sec) and the worst API surface (18 imported symbols across 13 operators).
+`Subject<Action>` upstream, `scan(reduce, initialSnapshot)` reducer, separate `filter + debounceTime + switchMap` streams per async field. The reducer-shape gives the best perf (306k op/sec) and the worst API surface (18 imported symbols across 13 operators).
 
 ### `reatom`
 
@@ -288,15 +288,15 @@ The state machine is right there: `account → profile → (team-size | preferen
 
 ### `rtk-listener`
 
-One slice + 6 listeners (3 async fields + 1 draft + 1 submit + 1 router). Per-field debounce uses `cancelActiveListeners() + delay()` — clean idiom but high per-event cost (32k op/sec, the slowest in the matrix). 18 `as` casts (most in matrix) — the `getState() as State` pattern stacks up across listeners.
+One slice + 6 listeners (3 async fields + 1 draft + 1 submit + 1 router). Per-field debounce uses `cancelActiveListeners() + delay()` — clean idiom but high per-event cost (33k op/sec, the slowest in the matrix). 18 `as` casts (most in matrix) — the `getState() as State` pattern stacks up across listeners.
 
 ### `redux-thunk`
 
-One slice + 4 thunks. Each async field is a `setTimeout` handle + reqId counter held in the factory closure. Best Redux-family perf (84k op/sec) — the thin dispatch path keeps overhead low.
+One slice + 4 thunks. Each async field is a `setTimeout` handle + reqId counter held in the factory closure. Best Redux-family perf (91k op/sec) — the thin dispatch path keeps overhead low.
 
 ### `redux-saga`
 
-`debounce(ms, action, saga)` × 3 — the cleanest per-field one-liner in the matrix for "debounced async with auto-supersession". Pays in bundle (16 KB gz, the heaviest) and throughput (51k op/sec).
+`debounce(ms, action, saga)` × 3 — the cleanest per-field one-liner in the matrix for "debounced async with auto-supersession". Pays in bundle (16 KB gz, the heaviest) and throughput (56k op/sec).
 
 ### `naked`
 

@@ -40,19 +40,19 @@ Two scenarios shipped so far. They probe different shapes of the same problem sp
 | **LOC** | **triggery — 162** (after naked 142) | **1st** of libraries |
 | **API surface** | **triggery — 1 import / 2 symbols** | **1st** |
 | **Bundle (gzipped)** | reatom — 3.52 KB | 2nd (5.17 KB, half of effector/rxjs/redux-thunk) |
-| **Throughput (sustained)** | **triggery (fireSync) — 275k op/sec** | **1st** (1.21× redux-thunk, 4.2× rtk) |
-| **Latency p50 (single ev.)** | rxjs — 0.25 µs | 3rd (1.5 µs fireSync) |
+| **Throughput (sustained)** | **triggery (fireSync) — 275k op/sec** | **1st** (1.17× redux-thunk, 4.10× rtk) |
+| **Latency p50 (single ev.)** | rxjs — 0.25 µs | 3rd (1.4 µs fireSync) |
 | **Scaling cost (adding R15)** | reatom / rtk — +5 LOC | tied at +6 |
 
 ### [`wizard-form`](./wizard-form) — multi-step + 3 async-validated fields + branching
 
 | axis | leader | triggery |
 |---|---|---|
-| **LOC** | **triggery — 190** (-6 under naked baseline 196) | **1st** (+11 vs reatom, +186 vs xstate) |
+| **LOC** | **triggery — 190** (-6 under naked baseline 196) | **1st** (40 LOC under reatom, 186 under xstate) |
 | **API surface** | **triggery — 1 import / 2 symbols** | **1st** |
 | **Cyclomatic complexity** | **triggery — 28** | **1st** |
 | **Bundle (gzipped)** | reatom — 4.44 KB | 2nd (6.08 KB) |
-| **Throughput (setField)** | rxjs — 358k op/sec | 4th (177k) |
+| **Throughput (setField)** | rxjs — 306k op/sec | 4th (180k) |
 | **Latency p50** | reatom — 2.1 µs | 3rd (2.5 µs) |
 | **Scaling (+2 async fields)** | effector — +40; **triggery — +27** | best-of-the-rest |
 
@@ -64,11 +64,11 @@ Two scenarios shipped so far. They probe different shapes of the same problem sp
 | **API surface** | **triggery / effector — 2 symbols** *(tied)* | **1st** *(tied)* |
 | **Bundle (gzipped)** | naked — 4.25 KB | 3rd (8.13 KB — beats redux trio + rxjs + xstate) |
 | **Dependency footprint** | naked — 0 packages | **tied 2nd** *(1 package)* |
-| **Drag throughput** | naked — 10.6M ev/sec *(throttle-honoring)* | 6th (2.26M — closure-throttle + transient-stream bypass) |
+| **Drag throughput** | naked — 9.07M ev/sec *(throttle-honoring)* | 6th (~2M — closure-throttle + transient-stream bypass; run-to-run variance is wide) |
 | **Latency p50** | naked — 0.54 µs | 4th (3.1 µs) |
 | **Cyclomatic complexity** | redux-saga — 32 *(slice excluded)* | **best non-redux** (88) |
 
-> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it wins single-file LOC (295) and cyclomatic (88) among non-redux engines**, plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. The trio of redux engines look small per-file only because they share a 202-LOC slice — count both files and they land at ≈ 370, above triggery. Drag throughput climbed 269k → 2.07M → 2.26M ev/sec across two passes: (1) closure-throttle at the call site instead of `actions.throttle` inside the trigger handler, then (2) the three transient-stream methods (`pointerMove`, `setCursor`, `setTileDropTarget`) bypass `runtime.fire('mutate')` entirely — direct state assign + emit. The bypass is semantically correct (those three update state nothing else reacts to and shouldn't trigger persist), not just faster. **Each scenario rewards a different mental model — that's the point.**
+> **Same library, different scenarios.** Triggery wins LOC + API surface + cyclomatic in wizard-form and bundle/API + deps in notifications-pipeline. In floating-workspace **it wins single-file LOC (295) and cyclomatic (88) among non-redux engines**, plus **API surface tied 1st, bundle 3rd, dependency footprint 1 package**. The trio of redux engines look small per-file only because they share a 202-LOC slice — count both files and they land at ≈ 370, above triggery. Drag throughput climbed from 269k to ~2M ev/sec (canonical run shows 1.95M; run-to-run variance is wide, 1.3M-2.5M) across two passes: (1) closure-throttle at the call site instead of `actions.throttle` inside the trigger handler, then (2) the three transient-stream methods (`pointerMove`, `setCursor`, `setTileDropTarget`) bypass `runtime.fire('mutate')` entirely — direct state assign + emit. The bypass is semantically correct (those three update state nothing else reacts to and shouldn't trigger persist), not just faster. **Each scenario rewards a different mental model — that's the point.**
 
 ## What we measure
 

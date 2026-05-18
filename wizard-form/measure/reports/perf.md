@@ -1,11 +1,11 @@
 | engine                 | throughput | p50 lat. | p95 lat. | p99 lat. |
 |------------------------|---:|---:|---:|---:|
-| Naked baseline         | 1747k ops/sec |  0.46 µs |  0.50 µs |  0.58 µs |
-| RxJS                   |  358k ops/sec |   2.2 µs |   2.3 µs |   3.1 µs |
-| Reatom                 |  275k ops/sec |   2.1 µs |   2.8 µs |   7.2 µs |
-| Triggery               |  177k ops/sec |   2.5 µs |   3.2 µs |   7.1 µs |
-| Redux + thunk          |   85k ops/sec |   9.4 µs |    10 µs |    16 µs |
-| XState                 |   79k ops/sec |   6.5 µs |   9.7 µs |    20 µs |
-| Redux + saga           |   64k ops/sec |   9.7 µs |    11 µs |    14 µs |
-| Effector               |   64k ops/sec |   5.9 µs |   6.8 µs |    14 µs |
-| RTK listenerMiddleware |   35k ops/sec |    11 µs |    12 µs |    21 µs |
+| Naked baseline         | 1111k ops/sec |  0.46 µs |  0.50 µs |  0.71 µs |
+| RxJS                   |  306k ops/sec |   2.3 µs |   2.5 µs |   3.5 µs |
+| Reatom                 |  221k ops/sec |   2.1 µs |   3.0 µs |    13 µs |
+| Triggery               |  180k ops/sec |   2.5 µs |   3.2 µs |   6.5 µs |
+| Redux + thunk          |   91k ops/sec |   9.5 µs |    11 µs |    30 µs |
+| XState                 |   65k ops/sec |   6.6 µs |   9.2 µs |    25 µs |
+| Effector               |   64k ops/sec |   5.8 µs |   7.5 µs |    13 µs |
+| Redux + saga           |   56k ops/sec |   9.8 µs |    11 µs |    25 µs |
+| RTK listenerMiddleware |   33k ops/sec |    11 µs |    12 µs |    27 µs |

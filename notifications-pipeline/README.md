@@ -26,8 +26,8 @@ For the 15-rule scenario in this folder (see [acceptance spec](#acceptance-behav
 | **LOC**                        | **triggery — 162**         | redux-saga — 264           | **1st** |
 | **API surface**                | **triggery — 1 import, 2 symbols** | redux-saga — 3 imports, 17 symbols | **1st** |
 | **Bundle (gzipped)**           | reatom — 3.52 KB           | redux-saga — 15.67 KB      | 2nd (**5.17 KB**) |
-| **Throughput (sustained)**     | **triggery (fireSync) — 275k op/sec** | redux-saga — 57k op/sec | **1st** (sync) · 4th-among-libs-default 164k (microtask-batched for React) — 1.21× redux-thunk, 1.96× effector, 4.2× rtk |
-| **Latency p50 (single ev.)**   | rxjs — 0.25 µs             | rtk — 7.0 µs               | 3rd (1.5 µs fireSync · 2.8 µs default) |
+| **Throughput (sustained)**     | **triggery (fireSync) — 275k op/sec** | redux-saga — 39k op/sec | **1st** (sync) · 6th-among-libs-default 116k (microtask-batched for React) — 1.17× redux-thunk, 2.05× effector, 4.10× rtk, 7.05× saga |
+| **Latency p50 (single ev.)**   | rxjs — 0.25 µs             | rtk — 7.2 µs               | 3rd (1.4 µs fireSync · 2.6 µs default) |
 | **Cyclomatic complexity**      | rxjs — 24                  | reatom — 35                | 3rd (26) |
 | **Scaling cost (R15 → +LOC)**  | reatom / rtk — +5          | effector — +13             | **+6** (handler-shaped, same as naked baseline) |
 
@@ -151,36 +151,36 @@ Two shapes per engine: **throughput** (burst of 1000 messages, microtasks flushe
 
 | engine | throughput | p50 lat. | p95 lat. | p99 lat. |
 |---|---:|---:|---:|---:|
-| Naked (no library)     |  603k ops/sec |  0.13 µs |  0.17 µs |  0.21 µs |
-| **Triggery (fireSync)**|  **275k ops/sec** |   **1.5 µs** |   **1.7 µs** |   **3.7 µs** |
-| Redux + thunk          |  227k ops/sec |   1.3 µs |   1.8 µs |   7.8 µs |
-| RxJS                   |  216k ops/sec |  0.25 µs |  0.33 µs |  0.92 µs |
-| Reatom                 |  214k ops/sec |   1.9 µs |   2.8 µs |   3.8 µs |
-| **Triggery (default)** |  **164k ops/sec** |   **2.8 µs** |   **10 µs** |   **51 µs** |
-| Effector               |  140k ops/sec |   2.7 µs |   6.2 µs |    12 µs |
-| RTK listenerMiddleware |   65k ops/sec |   7.0 µs |   8.9 µs |    19 µs |
-| Redux + saga           |   57k ops/sec |   6.5 µs |   9.7 µs |    41 µs |
+| Naked (no library)     |  632k ops/sec |  0.13 µs |  0.17 µs |  0.33 µs |
+| **Triggery (fireSync)**|  **275k ops/sec** |   **1.4 µs** |   **1.7 µs** |   **2.7 µs** |
+| Redux + thunk          |  235k ops/sec |   1.4 µs |   2.1 µs |   3.2 µs |
+| Reatom                 |  229k ops/sec |   1.9 µs |   2.8 µs |   5.0 µs |
+| RxJS                   |  221k ops/sec |  0.25 µs |  0.37 µs |  0.71 µs |
+| Effector               |  134k ops/sec |   2.7 µs |   6.0 µs |    11 µs |
+| **Triggery (default)** |  **116k ops/sec** |   **2.6 µs** |   **5.3 µs** |   **16 µs** |
+| RTK listenerMiddleware |   67k ops/sec |   7.2 µs |   9.2 µs |    23 µs |
+| Redux + saga           |   39k ops/sec |   6.2 µs |  10.0 µs |    37 µs |
 
-> Numbers vary ±10–15% between runs (perf bench is sensitive to system load). The values above come from a single canonical run on M1 Pro / Node 20; across 5 consecutive runs Triggery (fireSync) measured 271–286k op/sec (median 277), Triggery (default) 151–205k (median 187), and the rest stayed within similar ranges. Treat the table as "an honest snapshot," not a leaderboard tied to the last digit.
+> Numbers vary ±10–15% between runs (perf bench is sensitive to system load). The values above come from a single canonical run on M1 Pro / Node 20. Triggery (fireSync) typically measures 260–280k op/sec across consecutive runs; Triggery (default) varies more widely (100–210k) because the microtask scheduler is sensitive to GC timing. Treat the table as "an honest snapshot," not a leaderboard tied to the last digit.
 
-Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch and **leads sustained throughput** in this matrix at 275k ops/sec — 1.21× redux-thunk, 1.27× rxjs, 1.28× reatom, 1.96× effector, 4.2× rtk, 4.8× saga. Both modes are first-class.
+Triggery's default microtask scheduler batches the burst — useful for React (one batched render instead of 1000). `createTrigger({ schedule: 'sync' })` flips to sync dispatch and **leads sustained throughput** in this matrix at 275k ops/sec — 1.17× redux-thunk, 1.24× rxjs, 1.20× reatom, 2.05× effector, 4.10× rtk, 7.05× saga. Both modes are first-class.
 
-> rxjs's per-event latency p50 (0.25 µs) reflects sync `Subject.next` with no gating — but its sustained throughput (216k) is below Triggery's fireSync (275k) once the 15 gating/throttle/debounce rules run through the operator pipeline. Triggery wins on the burst side; rxjs wins on the single-event-latency side. **Redux-thunk is the surprise of the Redux family:** plain dispatch with a tiny router middleware leaves more room than rtk-listener or saga's heavier scaffolding (227k op/sec — best of the Redux family), but still trails Triggery sync by ~17%.
+> rxjs's per-event latency p50 (0.25 µs) reflects sync `Subject.next` with no gating — but its sustained throughput (221k) is below Triggery's fireSync (275k) once the 15 gating/throttle/debounce rules run through the operator pipeline. Triggery wins on the burst side; rxjs wins on the single-event-latency side. **Redux-thunk is the surprise of the Redux family:** plain dispatch with a tiny router middleware leaves more room than rtk-listener or saga's heavier scaffolding (235k op/sec — best of the Redux family), but still trails Triggery sync by ~15%.
 
 ### API surface — concepts you have to learn
 
 Counted by parsing each engine's `import` statements (third-party only) and the constructor calls inside the file. Lower is less library to read before you can understand the file.
 
-| engine | unique imports | primitive constructors |
-|---|---:|---|
-| naked        | 0 | 7× `emitter()` (in-file helper) |
-| **triggery** | **2** | **`createTrigger`×2, `createRuntime`×1** |
-| reatom       | 3 | `atom`×5, `action`×11, `createCtx`×1 |
-| effector     | 5 | `createEvent`×15, `createStore`×8, `createEffect`×3, `sample`×9, `combine`×1 |
-| rtk-listener | 5 | `createAction`×11, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×10 |
-| redux-thunk  | 7 | `createAction`×6, `createSlice`×1, 4× thunk creators (`messageThunk`, `typingThunk`, `channelChangedThunk`, `connectionThunk`) + tiny router middleware |
-| redux-saga   | 17 | `createAction`×11, `createSlice`×1, `createSagaMiddleware`×1, effects: `takeEvery`/`throttle`/`debounce`/`take`/`fork`/`cancel`/`delay`/`put`/`select`/`all`/`call` |
-| rxjs         | 15 | `new Subject`×10, `new BehaviorSubject`×5, `.pipe()`×12 — plus 13 operators (`filter`, `map`, `throttleTime`, `debounceTime`, `withLatestFrom`, `combineLatest`, `scan`, `merge`, `pairwise`, `startWith`, `switchMap`, `timer`, `EMPTY`) |
+| engine | imports | symbols | primitive constructors |
+|---|---:|---:|---|
+| naked        | 0 | 0 | 7× `emitter()` (in-file helper) |
+| **triggery** | **1** | **2** | **`createTrigger`×2, `createRuntime`×1** |
+| reatom       | 1 | 3 | `atom`×5, `action`×11, `createCtx`×1 |
+| effector     | 1 | 5 | `createEvent`×15, `createStore`×8, `createEffect`×3, `sample`×9, `combine`×1 |
+| rtk-listener | 1 | 5 | `createAction`×11, `createSlice`×1, `createListenerMiddleware`×1, `startListening`×10 |
+| redux-thunk  | 1 | 7 | `createAction`×6, `createSlice`×1, 4× thunk creators (`messageThunk`, `typingThunk`, `channelChangedThunk`, `connectionThunk`) + tiny router middleware |
+| rxjs         | 1 | 15 | `new Subject`×10, `new BehaviorSubject`×5, `.pipe()`×12 — plus 13 operators (`filter`, `map`, `throttleTime`, `debounceTime`, `withLatestFrom`, `combineLatest`, `scan`, `merge`, `pairwise`, `startWith`, `switchMap`, `timer`, `EMPTY`) |
+| redux-saga   | 3 | 17 | `createAction`×11, `createSlice`×1, `createSagaMiddleware`×1, effects: `takeEvery`/`throttle`/`debounce`/`take`/`fork`/`cancel`/`delay`/`put`/`select`/`all`/`call` |
 
 ### Complexity & type safety
 
@@ -258,14 +258,14 @@ Honest caveats — what the table doesn't capture:
 
 The picture isn't "one library wins everything". It's a multi-axis trade-off and each library is built for a slightly different priority. Honestly:
 
-- **Triggery is competitive on every axis and best on LOC + API surface + sustained throughput.** Smallest concept count (2 imported symbols), second-smallest bundle (5.17 KB gz, half the size of effector/rxjs/redux-thunk), and — in `fireSync` mode — **fastest sustained throughput in the matrix at 275k op/sec** (1.21× redux-thunk, 1.96× effector, 4.2× rtk, 4.8× saga). The scheduler trade-off is explicit per trigger (`default` batches for React, `fireSync` for low latency) — not a default that you have to opt out of.
+- **Triggery is competitive on every axis and best on LOC + API surface + sustained throughput.** Smallest concept count (2 imported symbols), second-smallest bundle (5.17 KB gz, half the size of effector/rxjs/redux-thunk), and — in `fireSync` mode — **fastest sustained throughput in the matrix at 275k op/sec** (1.17× redux-thunk, 2.05× effector, 4.10× rtk, 7.05× saga). The scheduler trade-off is explicit per trigger (`default` batches for React, `fireSync` for low latency) — not a default that you have to opt out of.
 - **Naked wins LOC and perf** *for this one scenario*. It loses the second you add a second scenario, an additional event family, or any need to compose rules. The lack of structure is the whole cost.
 - **RxJS is dispatch-fast** because Subjects are sync — but the ecosystem cost is steep: 15 imported symbols means a reader has to know 15 operators to read the file.
 - **Reatom is bundle-small and complexity-high.** The atom-as-direct-call API is direct, but ends up scoring highest on cyclomatic complexity because every output is a fresh `action` declaration.
-- **Effector is graph-shaped.** Every "rule" is several `sample`s wired together; great when you can hold the graph in your head, expensive when reading cold. The throughput tax (140k ops/sec vs triggery's 275k fireSync) is the reactive-graph cost.
-- **Redux-thunk is the perf surprise** — minimal middleware + thunk-as-function gives the leanest dispatch path of the Redux family, ties Triggery (sync) for fastest sustained throughput. The cost lands in the code shape: imperative `if`-chains in thunks, hand-rolled timers, no effect vocabulary.
+- **Effector is graph-shaped.** Every "rule" is several `sample`s wired together; great when you can hold the graph in your head, expensive when reading cold. The throughput tax (134k ops/sec vs triggery's 275k fireSync) is the reactive-graph cost.
+- **Redux-thunk is the perf surprise** — minimal middleware + thunk-as-function gives the leanest dispatch path of the Redux family at 235k op/sec, comes within 15% of Triggery (sync). The cost lands in the code shape: imperative `if`-chains in thunks, hand-rolled timers, no effect vocabulary.
 - **RTK listenerMiddleware is the heavy-but-official RTK way.** Worst throughput, most code in the RTK family, but identical to every other "official RTK" listener you've read. Predictable. Familiar.
-- **Redux-saga is the most code and one of the two slowest** (57k op/sec, 264 LOC) — but it's the only engine where throttle, debounce, cancel and delay are part of a uniform vocabulary instead of hand-rolled. If your team already thinks in effects, saga reads like a spec; if not, the generator scheduler is real overhead.
+- **Redux-saga is the most code and the slowest** (39k op/sec, 264 LOC) — but it's the only engine where throttle, debounce, cancel and delay are part of a uniform vocabulary instead of hand-rolled. If your team already thinks in effects, saga reads like a spec; if not, the generator scheduler is real overhead.
 
 **Where Triggery makes sense over the alternatives:**
 
@@ -315,13 +315,13 @@ The most-code of the RTK family, but every line is "the official RTK way" — no
 
 ### `redux-thunk`
 
-Plain redux-thunk: one slice + six output actions + four thunk creators + a 6-line `router` middleware that fans output actions to React subscribers. Inside each thunk: `getState()`, decide, `dispatch(out())`. Throttle and debounce are hand-rolled with a timestamp window + `setTimeout` — vanilla redux-thunk has no scheduling primitives. The thin dispatch path leaves more headroom than rtk-listener's heavier scaffolding or saga's generator scheduler (227k op/sec — best of the Redux family), but still trails Triggery sync at 275k by ~17%. The cost is in code shape: imperative branches inside thunks instead of effects/listeners.
+Plain redux-thunk: one slice + six output actions + four thunk creators + a 6-line `router` middleware that fans output actions to React subscribers. Inside each thunk: `getState()`, decide, `dispatch(out())`. Throttle and debounce are hand-rolled with a timestamp window + `setTimeout` — vanilla redux-thunk has no scheduling primitives. The thin dispatch path leaves more headroom than rtk-listener's heavier scaffolding or saga's generator scheduler (235k op/sec — best of the Redux family), but still trails Triggery sync at 275k by ~15%. The cost is in code shape: imperative branches inside thunks instead of effects/listeners.
 
 ### `redux-saga`
 
 Generators + effect-as-data. Each rule is its own saga: `takeEvery(newMessage, handleBadge)` for R5, `throttle(333, newMessage, handleToast)` for R7 toast, `debounce(600, newMessage, handleSound)` for R7 sound, `fork`/`cancel`/`delay` for R11 settled-read window, `takeEvery(connectionChanged, handleConnection)` for R12-R14. `select`/`put` read and write the store. The throttle and debounce effects come built-in — no hand-rolled timers, no `cancelActiveListeners()` dance.
 
-Saga is the most-code engine in the matrix (264 LOC) and one of the two slowest (57k op/sec — neck-and-neck with rtk-listener) — the price of the generator scheduler. What you buy in return is a uniform vocabulary: every rule is a saga, every side-effect is yielded, every `cancel`/`debounce`/`throttle` is named, not implemented. If your team already thinks in effects, saga reads like a spec; if not, the surface area is real.
+Saga is the most-code engine in the matrix (264 LOC) and the slowest in this run (39k op/sec — rtk-listener edged ahead at 67k) — the price of the generator scheduler. What you buy in return is a uniform vocabulary: every rule is a saga, every side-effect is yielded, every `cancel`/`debounce`/`throttle` is named, not implemented. If your team already thinks in effects, saga reads like a spec; if not, the surface area is real.
 
 ### `naked`
 
