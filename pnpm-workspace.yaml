@@ -1,6 +1,4 @@
 packages:
   - 'notifications-pipeline'
   - 'wizard-form'
-  # Future scenarios go here:
-  # - 'debounced-search'
-  # - 'modal-stack'
+  - 'floating-workspace'

@@ -1,0 +1,42 @@
+{
+  "name": "triggery-comparison-floating-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Floating-window workspace (Discord/Notion-like) with drag, resize, snap, z-order, keyboard shortcuts, modal stack and persisted layout — same scenario implemented in 9 orchestration libraries + a naked baseline.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "measure:loc": "node measure/loc.mjs",
+    "measure:bundle": "node measure/bundle.mjs",
+    "measure:code": "node measure/code.mjs",
+    "measure:deps": "node measure/deps.mjs",
+    "measure:perf": "tsx measure/perf.ts",
+    "measure": "pnpm run measure:loc && pnpm run measure:bundle && pnpm run measure:code && pnpm run measure:deps && pnpm run measure:perf"
+  },
+  "dependencies": {
+    "@reatom/core": "^3.10.3",
+    "@reduxjs/toolkit": "^2.12.0",
+    "@triggery/core": "^0.10.0",
+    "@triggery/react": "^0.10.0",
+    "@xstate/react": "^6.0.0",
+    "effector": "^23.2.3",
+    "effector-react": "^23.2.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-redux": "^9.3.0",
+    "redux-saga": "^1.3.0",
+    "rxjs": "^7.8.1",
+    "xstate": "^5.22.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "esbuild": "^0.25.12",
+    "tsx": "^4.22.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.13"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "measuredAt": "2026-05-18T07:31:37.951Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "minBytes": 4976,
+      "gzipBytes": 2177
+    },
+    {
+      "engine": "reatom",
+      "minBytes": 11208,
+      "gzipBytes": 4722
+    },
+    {
+      "engine": "triggery",
+      "minBytes": 18278,
+      "gzipBytes": 6564
+    },
+    {
+      "engine": "effector",
+      "minBytes": 18673,
+      "gzipBytes": 8365
+    },
+    {
+      "engine": "redux-thunk",
+      "minBytes": 27909,
+      "gzipBytes": 10678
+    },
+    {
+      "engine": "rtk-listener",
+      "minBytes": 31875,
+      "gzipBytes": 12154
+    },
+    {
+      "engine": "rxjs",
+      "minBytes": 32853,
+      "gzipBytes": 10563
+    },
+    {
+      "engine": "redux-saga",
+      "minBytes": 45095,
+      "gzipBytes": 16852
+    },
+    {
+      "engine": "xstate",
+      "minBytes": 46742,
+      "gzipBytes": 15562
+    }
+  ]
+}

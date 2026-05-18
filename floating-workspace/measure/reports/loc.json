@@ -1,0 +1,50 @@
+{
+  "measuredAt": "2026-05-18T07:31:37.182Z",
+  "rows": [
+    {
+      "engine": "redux-thunk",
+      "loc": 206,
+      "bytes": 9308
+    },
+    {
+      "engine": "reatom",
+      "loc": 211,
+      "bytes": 8903
+    },
+    {
+      "engine": "rtk-listener",
+      "loc": 212,
+      "bytes": 9486
+    },
+    {
+      "engine": "effector",
+      "loc": 217,
+      "bytes": 9773
+    },
+    {
+      "engine": "redux-saga",
+      "loc": 217,
+      "bytes": 9674
+    },
+    {
+      "engine": "rxjs",
+      "loc": 257,
+      "bytes": 11341
+    },
+    {
+      "engine": "naked",
+      "loc": 271,
+      "bytes": 9238
+    },
+    {
+      "engine": "triggery",
+      "loc": 332,
+      "bytes": 13227
+    },
+    {
+      "engine": "xstate",
+      "loc": 352,
+      "bytes": 15215
+    }
+  ]
+}

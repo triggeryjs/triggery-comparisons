@@ -1,0 +1,83 @@
+{
+  "measuredAt": "2026-05-18T07:32:40.648Z",
+  "dragEvents_N": 1000,
+  "lifecycle_N": 200,
+  "trials": 5,
+  "node": "v20.19.5",
+  "platform": "darwin",
+  "arch": "arm64",
+  "rows": [
+    {
+      "label": "Naked baseline",
+      "dragEventsPerSec": 11406800.734596618,
+      "dragSnapshots": 3,
+      "p50_us": 0.6250000000136424,
+      "p95_us": 0.7080000000314612,
+      "p99_us": 2.250000000003638
+    },
+    {
+      "label": "Redux + thunk",
+      "dragEventsPerSec": 7621428.408111518,
+      "dragSnapshots": 3,
+      "p50_us": 4.2089999999461725,
+      "p95_us": 13.249999999970896,
+      "p99_us": 33.33400000008169
+    },
+    {
+      "label": "Effector",
+      "dragEventsPerSec": 6861063.464836065,
+      "dragSnapshots": 3,
+      "p50_us": 3.0830000000037217,
+      "p95_us": 6.208999999955722,
+      "p99_us": 17.540999999994256
+    },
+    {
+      "label": "Reatom",
+      "dragEventsPerSec": 4854368.9320397675,
+      "dragSnapshots": 3,
+      "p50_us": 2.4169999999799074,
+      "p95_us": 3.458000000023276,
+      "p99_us": 9.792000000004464
+    },
+    {
+      "label": "RxJS",
+      "dragEventsPerSec": 1650505.4672994446,
+      "dragSnapshots": 3,
+      "p50_us": 1.0419999999840002,
+      "p95_us": 1.3749999999959073,
+      "p99_us": 5.708999999967546
+    },
+    {
+      "label": "Redux + saga",
+      "dragEventsPerSec": 722282.4124232561,
+      "dragSnapshots": 3,
+      "p50_us": 3.4160000000156288,
+      "p95_us": 11.500000000069122,
+      "p99_us": 30.583999999976186
+    },
+    {
+      "label": "Triggery",
+      "dragEventsPerSec": 338614.7069171179,
+      "dragSnapshots": 3,
+      "p50_us": 2.4579999999900792,
+      "p95_us": 3.54200000003857,
+      "p99_us": 9.25000000000864
+    },
+    {
+      "label": "XState",
+      "dragEventsPerSec": 100048.36337885693,
+      "dragSnapshots": 1002,
+      "p50_us": 4.3750000000386535,
+      "p95_us": 6.874999999979536,
+      "p99_us": 21.2919999999599
+    },
+    {
+      "label": "RTK listenerMiddleware",
+      "dragEventsPerSec": 71255.73555229373,
+      "dragSnapshots": 2,
+      "p50_us": 6.542000000081316,
+      "p95_us": 11.041999999974905,
+      "p99_us": 23.167000000000826
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "measuredAt": "2026-05-18T07:31:38.403Z",
+  "rows": [
+    {
+      "engine": "naked",
+      "importedSources": 0,
+      "importedSymbols": 0,
+      "primitives": {},
+      "primitivesTotal": 0,
+      "cyclo": 44,
+      "nesting": 7,
+      "asCasts": 1,
+      "nonNull": 0
+    },
+    {
+      "engine": "effector",
+      "importedSources": 1,
+      "importedSymbols": 2,
+      "primitives": {
+        "createEvent": 12,
+        "createStore": 1
+      },
+      "primitivesTotal": 13,
+      "cyclo": 42,
+      "nesting": 7,
+      "asCasts": 1,
+      "nonNull": 0
+    },
+    {
+      "engine": "triggery",
+      "importedSources": 1,
+      "importedSymbols": 2,
+      "primitives": {
+        "createTrigger": 4,
+        "createRuntime": 1
+      },
+      "primitivesTotal": 5,
+      "cyclo": 48,
+      "nesting": 7,
+      "asCasts": 3,
+      "nonNull": 0
+    },
+    {
+      "engine": "reatom",
+      "importedSources": 1,
+      "importedSymbols": 3,
+      "primitives": {
+        "atom": 1,
+        "action": 1,
+        "createCtx": 1
+      },
+      "primitivesTotal": 3,
+      "cyclo": 43,
+      "nesting": 8,
+      "asCasts": 1,
+      "nonNull": 0
+    },
+    {
+      "engine": "redux-thunk",
+      "importedSources": 1,
+      "importedSymbols": 5,
+      "primitives": {
+        "createSlice": 1
+      },
+      "primitivesTotal": 1,
+      "cyclo": 42,
+      "nesting": 6,
+      "asCasts": 3,
+      "nonNull": 0
+    },
+    {
+      "engine": "rtk-listener",
+      "importedSources": 1,
+      "importedSymbols": 5,
+      "primitives": {
+        "createAction": 1,
+        "createSlice": 1,
+        "createListenerMiddleware": 1,
+        "startListening": 2
+      },
+      "primitivesTotal": 5,
+      "cyclo": 37,
+      "nesting": 6,
+      "asCasts": 4,
+      "nonNull": 0
+    },
+    {
+      "engine": "xstate",
+      "importedSources": 1,
+      "importedSymbols": 6,
+      "primitives": {},
+      "primitivesTotal": 0,
+      "cyclo": 52,
+      "nesting": 8,
+      "asCasts": 4,
+      "nonNull": 0
+    },
+    {
+      "engine": "redux-saga",
+      "importedSources": 3,
+      "importedSymbols": 12,
+      "primitives": {
+        "createAction": 1,
+        "createSlice": 1
+      },
+      "primitivesTotal": 2,
+      "cyclo": 37,
+      "nesting": 6,
+      "asCasts": 5,
+      "nonNull": 0
+    },
+    {
+      "engine": "rxjs",
+      "importedSources": 2,
+      "importedSymbols": 13,
+      "primitives": {
+        "Subject": 1,
+        "BehaviorSubject": 1,
+        ".pipe(": 7
+      },
+      "primitivesTotal": 9,
+      "cyclo": 51,
+      "nesting": 7,
+      "asCasts": 1,
+      "nonNull": 0
+    }
+  ]
+}
